@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DynamicIsland, type DynamicIslandState } from "@/components/glint/dynamic-island";
 import { useToast } from "@/components/glint/toast";
 import { Icon } from "@/icons/icon";
+import { GlassIcon } from "@/components/glass-icon";
 import { cn } from "@/lib/utils";
 
 type Status = { chrome: boolean; showit: boolean; title: string };
@@ -74,6 +75,18 @@ function parseIssues(lines: Line[]): Issue[] {
   }
   return out;
 }
+
+/** Glass icon for an issue, by what kind of problem it is. */
+const issueIcon = (problem: string) =>
+  /intentional/.test(problem) ? "image"
+  : /locked/.test(problem) ? "lock"
+  : /^text d+px/.test(problem) ? "text"
+  : /off screen/.test(problem) ? "offscreen"
+  : /wraps past/.test(problem) ? "box"
+  : /too close/.test(problem) ? "rows"
+  : /overlaps/.test(problem) ? "layers"
+  : /below section/.test(problem) ? "height"
+  : "scan";
 
 // ---- mood ---------------------------------------------------------------------------------------
 
@@ -250,18 +263,6 @@ type Ctx = {
 
 // ---- building blocks ----------------------------------------------------------------------------
 
-type TileTone = "blue" | "gold" | "violet" | "mint";
-// Written out in full so Tailwind generates them (it can't see class names built at runtime).
-const TILE: Record<TileTone, string> = { blue: "tile-blue", gold: "tile-gold", violet: "tile-violet", mint: "tile-mint" };
-/** Glossy 3D tile with a white filled icon. */
-function Tile({ icon, tone = "blue", className, iconSize = "50%" }: { icon: string; tone?: TileTone; className?: string; iconSize?: string }) {
-  return (
-    <span aria-hidden className={cn("tile size-11 shrink-0", TILE[tone], className)}>
-      <Icon name={icon} variant="solid" size={iconSize} className="text-white drop-shadow-[0_3px_6px_rgb(30_20_90/.3)]" />
-    </span>
-  );
-}
-
 /** Round white icon button (header actions). */
 function Round({ icon, title, onClick, className }: { icon: string; title: string; onClick: () => void; className?: string }) {
   return (
@@ -302,7 +303,7 @@ function Segmented<T extends string>({ value, options, onChange }: { value: T; o
 
 const Muted = ({ children, className }: { children: ReactNode; className?: string }) => <p className={cn("text-[13px] text-muted-foreground", className)}>{children}</p>;
 
-/** Row: grey round icon, title, subtitle, optional trailing. */
+/** Row: glass icon, title, subtitle, optional trailing. */
 function Row({ icon, title, sub, onClick, trailing, disabled }: { icon: string; title: string; sub: string; onClick?: () => void; trailing?: ReactNode; disabled?: boolean }) {
   const Tag = onClick ? "button" : "div";
   return (
@@ -312,9 +313,7 @@ function Row({ icon, title, sub, onClick, trailing, disabled }: { icon: string; 
       disabled={disabled}
       className={cn("surface flex w-full items-center gap-3.5 px-4 py-3.5 text-left", onClick && "transition-transform hover:-translate-y-0.5 active:scale-[0.99] disabled:opacity-50")}
     >
-      <span className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-ink/80">
-        <I name={icon} className="size-[18px]" />
-      </span>
+      <GlassIcon name={icon} size={40} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[15px] font-semibold text-ink">{title}</span>
         <span className="block truncate text-xs text-muted-foreground">{sub}</span>
@@ -342,11 +341,11 @@ function Home({ status, job, lines, issues, runs, mood, running, fixedToday, sta
       </div>
 
       {!status.showit ? (
-        <Row icon="external-link" title={status.chrome ? "Bring up Showit" : "Open Showit"} sub="Log in and open your site in its window" onClick={() => sai?.openShowit()} />
+        <Row icon="offscreen" title={status.chrome ? "Bring up Showit" : "Open Showit"} sub="Log in and open your site in its window" onClick={() => sai?.openShowit()} />
       ) : (
         <div className="grid grid-cols-2 gap-3 pt-3">
-          <Feature tone="blue" icon="scan" title={running && !job?.edits ? "Checking…" : "Check page"} sub="Find mobile issues" onClick={() => ready && start("audit.js", [], "Check this page")} disabled={!ready} />
-          <Feature tone="gold" icon="magic-wand" title={running && job?.edits ? "Fixing…" : "Fix page"} sub="Safe, undoable fixes" onClick={() => ready && fixPage()} disabled={!ready} />
+          <Feature icon="scan" title={running && !job?.edits ? "Checking…" : "Check page"} sub="Find mobile issues" onClick={() => ready && start("audit.js", [], "Check this page")} disabled={!ready} />
+          <Feature icon="wand" title={running && job?.edits ? "Fixing…" : "Fix page"} sub="Safe, undoable fixes" onClick={() => ready && fixPage()} disabled={!ready} />
         </div>
       )}
 
@@ -367,11 +366,11 @@ function Home({ status, job, lines, issues, runs, mood, running, fixedToday, sta
       )}
 
       <div className="space-y-2.5">
-        <Row icon="layers" title="Check all pages" sub="Every page and blog template" onClick={() => start("audit.js", ["--all"], "Check all pages")} disabled={!ready} />
-        <Row icon="eye" title="Preview fixes" sub="Cursor tour in Showit, no edits" onClick={() => start("fix.js", [], "Preview fixes")} disabled={!ready} />
-        <Row icon="layout" title="Rebuild a section" sub="Lay it out from the desktop design" onClick={() => { setTarget("section"); go("fix"); }} />
+        <Row icon="pages" title="Check all pages" sub="Every page and blog template" onClick={() => start("audit.js", ["--all"], "Check all pages")} disabled={!ready} />
+        <Row icon="scan" title="Preview fixes" sub="Cursor tour in Showit, no edits" onClick={() => start("fix.js", [], "Preview fixes")} disabled={!ready} />
+        <Row icon="layers" title="Rebuild a section" sub="Lay it out from the desktop design" onClick={() => { setTarget("section"); go("fix"); }} />
         <Row
-          icon="alert-circle"
+          icon="rows"
           title="Issues"
           sub={issues ? `${issues.length} found · ${issues.filter((i) => i.fixable).length} fixable` : "Run a check to see them"}
           onClick={() => go("issues")}
@@ -386,7 +385,7 @@ function Home({ status, job, lines, issues, runs, mood, running, fixedToday, sta
         {runs.length ? (
           <div className="space-y-2.5">
             {runs.slice(0, 2).map((r) => (
-              <Row key={r.run} icon={runTitle(r) === "Undo" ? "undo" : "check-circle"} title={runTitle(r)} sub={`${r.n} change${r.n === 1 ? "" : "s"} · ${r.pages.join(", ")}`} />
+              <Row key={r.run} icon={runTitle(r) === "Undo" ? "undo" : "history"} title={runTitle(r)} sub={`${r.n} change${r.n === 1 ? "" : "s"} · ${r.pages.join(", ")}`} />
             ))}
           </div>
         ) : (
@@ -397,11 +396,13 @@ function Home({ status, job, lines, issues, runs, mood, running, fixedToday, sta
   );
 }
 
-/** Feature card with a glossy tile sitting over its top edge. */
-function Feature({ tone, icon, title, sub, onClick, disabled }: { tone: TileTone; icon: string; title: string; sub: string; onClick: () => void; disabled?: boolean }) {
+/** Feature card with a glass icon sitting over its top edge. */
+function Feature({ icon, title, sub, onClick, disabled }: { icon: string; title: string; sub: string; onClick: () => void; disabled?: boolean }) {
   return (
     <button type="button" onClick={onClick} disabled={disabled} className="surface relative px-4 pb-4 pt-12 text-left transition-transform hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-60">
-      <Tile icon={icon} tone={tone} className="absolute -top-4 left-4 size-14 -rotate-6 rounded-[18px]" />
+      <span className="absolute -top-6 left-3 -rotate-6">
+        <GlassIcon name={icon} size={60} />
+      </span>
       <span className="block text-[15px] font-semibold text-ink">{title}</span>
       <span className="block text-xs text-muted-foreground">{sub}</span>
     </button>
@@ -485,7 +486,7 @@ function Fix({ status, job, lines, mood, running, start, stop, confirm, target, 
         </div>
       ) : (
         <div className="mt-5">
-          <Row icon="external-link" title={status.chrome ? "Bring up Showit" : "Open Showit"} sub="Log in and open your site in its window" onClick={() => sai?.openShowit()} />
+          <Row icon="offscreen" title={status.chrome ? "Bring up Showit" : "Open Showit"} sub="Log in and open your site in its window" onClick={() => sai?.openShowit()} />
         </div>
       )}
 
@@ -552,7 +553,7 @@ function IssuesScreen({ issues, status, running, start }: Ctx) {
         <section className="surface p-4">
           <p className="text-xs text-muted-foreground">{show === "all" ? "Everything found" : show === "fix" ? "The app can fix these" : "These need a person in Showit"}</p>
           <p className="text-[15px] font-semibold text-ink">{list.length ? `${list.length} item${list.length === 1 ? "" : "s"}` : "Nothing here"}</p>
-          <Path items={list.map((i) => ({ icon: i.fixable ? "magic-wand" : "alert-circle", tone: i.fixable ? "blue" : "gold", title: i.what.replace(/^text /, ""), sub: i.problem.split(";")[0] }))} />
+          <Path items={list.map((i) => ({ icon: issueIcon(i.problem), title: i.what.replace(/^text /, ""), sub: i.problem.split(";")[0] }))} />
         </section>
       )}
       {status.showit && !running && (
@@ -582,8 +583,8 @@ function Banner({ eyebrow, title, sub, pill, icon }: { eyebrow: string; title: s
   );
 }
 
-/** Zig-zag path of 3D tiles linked by dots (the learning-path list). */
-function Path({ items }: { items: { icon: string; tone: TileTone; title: string; sub: string; action?: ReactNode }[] }) {
+/** Zig-zag path of glass icons linked by dots (the learning-path list). */
+function Path({ items }: { items: { icon: string; title: string; sub: string; action?: ReactNode }[] }) {
   return (
     <ol className="mt-3">
       {items.map((it, k) => (
@@ -594,7 +595,7 @@ function Path({ items }: { items: { icon: string; tone: TileTone; title: string;
             </span>
           )}
           <div className={cn("flex items-center gap-3", k % 2 && "flex-row-reverse text-right")}>
-            <Tile icon={it.icon} tone={it.tone} className="size-12 rounded-[16px]" />
+            <GlassIcon name={it.icon} size={48} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-ink">{it.title}</p>
               <p className="line-clamp-2 text-[11px] text-muted-foreground">{it.sub}</p>
@@ -619,8 +620,7 @@ function HistoryScreen({ runs, status, running, start, confirm, fixedToday }: Ct
         <p className="text-[15px] font-semibold text-ink">{list.length ? "Your changes" : "Nothing here yet"}</p>
         <Path
           items={list.map((r) => ({
-            icon: runTitle(r) === "Undo" ? "undo" : r.notes[0]?.startsWith("rebuild") ? "layout" : "magic-wand",
-            tone: runTitle(r) === "Undo" ? "violet" : r.notes[0]?.startsWith("rebuild") ? "gold" : "blue",
+            icon: runTitle(r) === "Undo" ? "undo" : r.notes[0]?.startsWith("rebuild") ? "layers" : "wand",
             title: runTitle(r),
             sub: `${r.n} change${r.n === 1 ? "" : "s"} · ${r.pages.join(", ")} · ${new Date(r.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`,
             action: (
