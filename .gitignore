@@ -5,3 +5,5 @@ stop
 dist/
 release/
 demo/
+website/node_modules/
+website/.next/

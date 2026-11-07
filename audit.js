@@ -4,11 +4,13 @@
 //   node audit.js --all            every page
 //   node audit.js --selftest
 
+// <rules> (this part is also copied into the website's playground: website/scripts/sync-rules.mjs)
 const MOBILE_W = 320;
 const MIN_TEXT = 12; // px; ponytail: fixed threshold, make per-style if it flags intentional captions
 const MAX_NUDGE = 40; // px; text spilling further than this is treated as a deliberate design (marquees etc.)
 const EDGE = 15; // px; side margin kept when widening text
 const MIN_GAP = 6; // px; minimum vertical breathing room between stacked small texts
+// </rules>
 
 // Page model (Immutable.js in React props) + measured text ink from the mobile preview iframe.
 async function readModel(page) {
@@ -35,6 +37,7 @@ async function readModel(page) {
   return model;
 }
 
+// <rules>
 // Runs inside the preview iframe. Where the text actually is, relative to its box, in design px.
 function measureInk() {
   const out = {};
@@ -178,6 +181,7 @@ function audit({ blocks, theme, ink = {} }) {
   }
   return issues;
 }
+// </rules>
 
 function selftest() {
   const assert = require('assert');
