@@ -306,7 +306,14 @@ export default function Page() {
 
       {/* FOOTER */}
       <footer className="relative overflow-hidden bg-[#2f4fe8] px-6 pb-8 pt-10 text-white">
-        <p aria-hidden className="display pointer-events-none select-none text-center text-[19vw] leading-none text-white/10">SHOWIT AI</p>
+        {/* Watermark: a soft blurred glow behind, gradient lettering in front, both fading out downward. */}
+        <div aria-hidden className="pointer-events-none relative select-none text-center text-[19vw] leading-none">
+          {/* The glow isn't masked: a mask would clip the blur into a visible box. */}
+          <p className="display absolute inset-x-0 top-0 text-white/20 blur-2xl">SHOWIT AI</p>
+          <p className="display relative bg-gradient-to-b from-white/60 via-white/20 to-white/0 bg-clip-text text-transparent [mask-image:linear-gradient(to_bottom,#000_40%,transparent_95%)]">
+            SHOWIT AI
+          </p>
+        </div>
         <div className="mx-auto mt-6 grid max-w-6xl gap-8 text-sm sm:grid-cols-4">
           {[
             ["Product", [["Checks", "#checks"], ["Try it", "#try"], ["Compare", "#compare"], ["Demo", "#demo"]]],
