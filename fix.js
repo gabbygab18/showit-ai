@@ -1,0 +1,71 @@
+// Fix mobile issues found by audit.js, typing into Showit's own fields.
+//   node fix.js [--page "About" | --all]           tour: cursor shows each fix, edits nothing
+//   node fix.js [--page "About" | --all] --apply   make the edits (undo with: node restore.js)
+// Shared sections (Header/Footer) are done last on a page; a change there applies to every page.
+const { audit, readModel, textSize } = require('./audit');
+const { FIELD, RUN, eachPage, toPage, select, findEl, applyMobile, setSectionHeight, say, log, readLog } = require('./editor');
+
+const key = i => i.id + JSON.stringify(i.fix);
+// Report-only problems in one section (overlaps, spills...), as comparable strings.
+const problems = (model, blockId) => audit(model).filter(x => !x.fix && x.id.split('.')[0] === blockId)
+  .map(x => `${x.what}: ${x.problem.split(' (')[0]}`);
+
+async function main(page) {
+  const apply = process.argv.includes('--apply');
+  let done = 0;
+  for await (const name of eachPage(page)) {
+    // Fixes that made things worse (this run or an earlier one) aren't retried.
+    const reverted = new Set(readLog().filter(e => e.skip).map(e => e.skip));
+    // Several passes: a fix can reveal the next (widen first, then grow height if still wrapping).
+    for (let pass = 1; pass <= (apply ? 6 : 1); pass++) {
+      if (pass > 1) await toPage(page); // shared-section edits leave "Main Site" open
+      let model = await readModel(page);
+      const seen = new Set();
+      const issues = audit(model).filter(i => i.fix && !reverted.has(key(i)) && !seen.has(i.id) && seen.add(i.id))
+        .sort((a, b) => a.shared - b.shared);
+      if (!issues.length) break;
+      console.log(`\n${name}, pass ${pass}: ${issues.length} fix(es) ${apply ? 'to apply' : 'planned (tour only; add --apply to edit)'}`);
+      for (const i of issues) {
+        const { also = [], ...main } = i.fix;
+        const plan = Object.entries(main).map(([k, v]) => `${FIELD[k]?.[1] ?? 'section height'} ${v}`).join(', ')
+          + (also.length ? ` (+${also.length} aligned element(s) moved with it)` : '');
+        console.log(`- ${i.block}${i.shared ? ' (shared, all pages)' : ''}: ${i.what}: ${i.problem} -> ${plan}`);
+        await say(page, `${i.problem.split(' (')[0]}. ${apply ? 'Fixing' : 'Would set'}: ${plan}`);
+        if (!apply) { await select(page, i.id); await page.waitForTimeout(1800); continue; }
+        const blockId = i.id.split('.')[0];
+        const before = new Set(problems(model, blockId));
+        let undo;
+        if (main.sectionH) {
+          const prevH = model.blocks.find(b => b.id === blockId).mobile.h;
+          model = await setSectionHeight(page, model, blockId, main.sectionH, i.problem);
+          undo = async why => { model = await setSectionHeight(page, model, blockId, prevH, why); };
+        } else {
+          // The element plus any aligned siblings, applied as one change and undone as one.
+          const group = [{ id: i.id, fix: main }, ...also];
+          const prev = group.map(g => {
+            const el = findEl(model, g.id);
+            return { id: g.id, fix: Object.fromEntries(Object.keys(g.fix).map(k => [k, k === 'size' ? textSize(el, model.theme) : el.mobile[k]])) };
+          });
+          for (const g of group) model = await applyMobile(page, model, g.id, g.fix, i.problem);
+          undo = async why => { for (const p of prev.reverse()) model = await applyMobile(page, model, p.id, p.fix, why); };
+        }
+        // Never make it worse: a fix that creates a new overlap etc. in its section is undone.
+        const worse = problems(model, blockId).filter(p => !before.has(p));
+        if (worse.length) {
+          await undo(`revert: ${worse[0]}`);
+          reverted.add(key(i));
+          log({ page: name, id: i.id, note: 'skip next time', skip: key(i) });
+          console.log(`  reverted, it caused: ${worse.join('; ')}. Left for a human.`);
+          continue;
+        }
+        done++;
+        console.log('  ok');
+      }
+    }
+  }
+  const msg = apply ? (done ? `Done: ${done} fix(es) applied. Undo with: node restore.js ${RUN}` : 'Nothing to fix on mobile.') : 'Tour done.';
+  console.log(`\n${msg}`);
+  await say(page, msg.split(' Undo')[0]);
+}
+
+if (require.main === module) require('./connect').run(main);

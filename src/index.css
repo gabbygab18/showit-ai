@@ -1,0 +1,228 @@
+@import "tailwindcss";
+
+/*
+ * Soft grey canvas, white rounded cards, periwinkle accent, glossy 3D tiles (blue / gold), black for the
+ * selected tab and primary text. Poppins throughout (semibold headings). shadcn token names, so Glint
+ * components drop in unchanged.
+ */
+@font-face {
+  font-family: "Poppins";
+  src: url("./fonts/poppins-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("./fonts/poppins-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poppins";
+  src: url("./fonts/poppins-600.woff2") format("woff2");
+  font-weight: 600 800;
+  font-display: swap;
+}
+
+:root {
+  --radius: 1rem;
+  --brand: #6672f2; /* periwinkle */
+  --brand-deep: #4b55d6;
+  --ink: #141418;
+  --background: #f3f3f6;
+  --foreground: #141418;
+  --card: #ffffff;
+  --card-foreground: #141418;
+  --popover: #ffffff;
+  --popover-foreground: #141418;
+  --primary: #6672f2;
+  --primary-foreground: #ffffff;
+  --secondary: #eef0ff;
+  --secondary-foreground: #3f48c4;
+  --muted: #f0f0f3;
+  --muted-foreground: #8e8e98;
+  --accent: #eef0ff;
+  --accent-foreground: #3f48c4;
+  --destructive: #e5484d;
+  --border: #ececf0;
+  --input: #e2e2e8;
+  --ring: #6672f2;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-deep: var(--brand-deep);
+  --color-ink: var(--ink);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  /* The window is transparent; only the rounded panel (or the island) is painted. */
+  html,
+  body,
+  #root {
+    height: 100%;
+    background: transparent;
+    color: var(--foreground);
+    color-scheme: light;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    text-wrap: balance;
+  }
+  ::selection {
+    background: #dfe2ff;
+  }
+  :where(body *) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  :where(body *):hover {
+    scrollbar-color: rgb(20 20 24 / 0.18) transparent;
+  }
+}
+
+/* White card, soft shadow, no hard border. */
+@utility surface {
+  background: var(--card);
+  border-radius: 22px;
+  box-shadow: 0 1px 2px rgb(20 20 40 / 0.04), 0 8px 24px -12px rgb(40 40 80 / 0.12);
+}
+
+/* Glossy 3D tile: gradient body, top sheen, inner shade and a soft coloured drop, white icon inside. */
+@utility tile {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 14px;
+  box-shadow:
+    inset 0 2px 1px rgb(255 255 255 / 0.6),
+    inset 0 -10px 18px rgb(30 20 90 / 0.18),
+    0 12px 22px -10px var(--tile-shadow, rgb(80 90 230 / 0.6));
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 52% 0;
+    z-index: -1;
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.55), transparent);
+  }
+}
+@utility tile-blue {
+  background-image: linear-gradient(150deg, #c4cbff 0%, #8692ff 40%, #5a66ea 100%);
+  --tile-shadow: rgb(90 100 235 / 0.55);
+}
+@utility tile-gold {
+  background-image: linear-gradient(150deg, #fff0b8 0%, #ffcf4d 40%, #f2a51a 100%);
+  --tile-shadow: rgb(240 160 20 / 0.55);
+}
+@utility tile-violet {
+  background-image: linear-gradient(150deg, #ecd9ff 0%, #b98cff 40%, #7a4ff0 100%);
+  --tile-shadow: rgb(130 80 240 / 0.5);
+}
+@utility tile-mint {
+  background-image: linear-gradient(150deg, #c9fbe9 0%, #5fe0b4 40%, #1fae83 100%);
+  --tile-shadow: rgb(30 170 130 / 0.45);
+}
+
+/* Link hover (from demo-website's Hyperlink): underline sweeps in, arrow nudges up-right. */
+.hyperlink {
+  background:
+    linear-gradient(var(--hl), var(--hl)) 100% 100% / 0% 1.5px no-repeat,
+    linear-gradient(color-mix(in oklab, var(--hl) 30%, transparent), color-mix(in oklab, var(--hl) 30%, transparent)) 0 100% / 100% 1px no-repeat;
+  padding-bottom: 2px;
+  transition: background-size 0.4s cubic-bezier(0.65, 0, 0.35, 1);
+}
+.hyperlink:hover,
+.hyperlink:focus-visible {
+  background-position: 0 100%, 0 100%;
+  background-size: 100% 1.5px, 100% 1px;
+}
+.hyperlink-arrow {
+  display: inline-block;
+  transition: transform 0.35s cubic-bezier(0.34, 1.8, 0.64, 1);
+}
+.hyperlink:hover .hyperlink-arrow,
+.hyperlink:focus-visible .hyperlink-arrow {
+  transform: translate(2px, -2px);
+}
+
+/* Equalizer bars on the island while a job runs. */
+@keyframes sai-eq {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Halo around the big round action button. */
+@keyframes sai-halo {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+
+.drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
