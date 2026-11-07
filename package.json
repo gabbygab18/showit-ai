@@ -1,6 +1,6 @@
 {
   "name": "showit-ai",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Showit AI: checks and fixes the mobile layout of Showit sites by driving the Showit editor.",
   "author": "Gabriel Andrei Villanueva",
@@ -50,7 +50,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Showit AI"
+      "shortcutName": "Showit AI",
+      "artifactName": "Showit-AI-win-x64-setup.${ext}"
     }
   },
   "allowScripts": {
