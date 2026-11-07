@@ -272,7 +272,7 @@ export default function Page() {
 
       {/* CTA over the footer */}
       <section className="relative mt-28 px-6">
-        <div aria-hidden className="absolute inset-x-0 bottom-0 top-1/2 bg-[#2f4fe8]" />
+        <div aria-hidden className="absolute inset-x-0 bottom-0 top-1/2 rounded-t-[56px] bg-[#2f4fe8] sm:rounded-t-[120px]" />
         <div className="relative mx-auto grid max-w-5xl items-center gap-8 overflow-hidden rounded-[28px] border border-white bg-gradient-to-br from-white to-[#e6ecff] p-8 shadow-2xl shadow-[#1b2fa8]/30 sm:grid-cols-[1.3fr_1fr] sm:p-12">
           <div>
             <h2 className="display text-3xl text-ink sm:text-4xl">
