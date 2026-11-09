@@ -310,7 +310,7 @@ async function main(page) {
   for await (const name of eachPage(page)) {
     // Shared sections (Header/Footer) appear on every page: report them once.
     const issues = audit(await readModel(page)).filter(i => !i.shared || !seenShared.has(i.id + i.problem));
-    for (const i of issues) if (i.fix && skips.has(i.id + JSON.stringify(i.fix))) { i.fix = null; i.problem += '; fixing it made things worse before, needs a person'; }
+    for (const i of issues) if (i.fix && skips.has(i.id + JSON.stringify(i.fix))) { i.fix = null; i.problem += "; couldn't be fixed safely before (made it worse or Showit wouldn't let it be edited), needs a person"; }
     issues.filter(i => i.shared).forEach(i => seenShared.add(i.id + i.problem));
     console.log(`
 #### Page: ${name} (${issues.length} issue(s))`);
@@ -325,7 +325,7 @@ async function main(page) {
 ${total} issue(s), ${fixable} fixable.`);
 }
 
-module.exports = { audit, readModel, textSize, textAlign, plain, onMobile, MOBILE_W, EDGE };
+module.exports = { audit, readModel, textSize, textAlign, plain, onMobile, MOBILE_W, MIN_TEXT, MIN_HERO, DESKTOP_W, EDGE };
 if (require.main === module) {
   if (process.argv.includes('--selftest')) selftest();
   else require('./connect').run(main);

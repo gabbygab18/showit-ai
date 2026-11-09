@@ -441,7 +441,7 @@ function Fix({ status, job, lines, mood, running, start, stop, confirm, target, 
     const all = target === "all";
     confirm({
       title: all ? "Fix every page?" : "Fix this page?",
-      body: `Edits the mobile layout ${all ? "of every page (takes a while; leave the Showit window alone)" : "of the page open in Showit"}. Desktop isn't touched. Undo from History.`,
+      body: `Edits the mobile layout ${all ? "of every page (takes a while; leave the Showit window alone)" : "of the page open in Showit"}. Sections a quick fix can't sort out are laid out again from the desktop design. Desktop isn't touched. Undo from History.`,
       go: all ? "Fix all pages" : "Fix this page",
       run: () => start("fix.js", all ? ["--all", "--apply"] : ["--apply"], all ? "Fix all pages" : "Fix this page", true),
     });
