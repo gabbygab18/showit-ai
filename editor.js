@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { readModel, textSize } = require('./audit');
-const { click, say } = require('./cursor');
+const { click, moveTo, say } = require('./cursor');
 
 // Writable data folder: the desktop app sets SHOWIT_AI_DATA (install folders can be read-only).
 const DATA = process.env.SHOWIT_AI_DATA || __dirname;
@@ -21,9 +21,11 @@ const FIELD = {
 };
 
 const domId = id => id.replace(/\./g, '_');
+// id: "block.elements.3", or "block.elements.3.elements.<child id>" for an element inside a group.
 const findEl = (model, id) => {
-  const [b, , i] = id.split('.');
-  return model.blocks.find(x => x.id === b)?.elements[+i];
+  const [b, , i, , c] = id.split('.');
+  const el = model.blocks.find(x => x.id === b)?.elements[+i];
+  return c ? el?.elements?.[c] : el;
 };
 const log = entry => fs.appendFileSync(LOG, JSON.stringify({ at: new Date().toISOString(), run: RUN, ...entry }) + '\n');
 const readLog = () => fs.existsSync(LOG)
@@ -110,9 +112,43 @@ async function* eachPage(page) {
 
 // ---- selecting + typing -------------------------------------------------------------------
 
+// Showit's group focus mode (a group opened by double-click): its children get stage hitboxes.
+const inGroup = page => page.evaluate(() => [...document.querySelectorAll('[id^="si_element_mobile_"]')].some(e => /_elements_\d+_elements_/.test(e.id)));
+async function leaveGroup(page) {
+  for (let i = 0; i < 2 && await inGroup(page); i++) { await page.keyboard.press('Escape'); await page.waitForTimeout(400); }
+}
+
+// Selection goes through the layers list, which only shows on the left panel's PAGE tab.
+async function showLayers(page) {
+  if (await page.locator('[data-intercom-target="layer panel"]').isVisible().catch(() => false)) return;
+  const tab = page.locator('[data-intercom-target="page panel tab"]');
+  if (await tab.isVisible().catch(() => false)) { await click(page, tab); await page.waitForTimeout(700); }
+}
+
+// Selected in either view: a layers-row click selects in whichever stage (phone/desktop) was used last.
+// Fields are always switched to the phone tab and checked against the mobile value before typing.
+const isSelected = (page, id) => page.evaluate(d => ['mobile', 'desktop'].some(l => document.getElementById(`si_element_${l}_${d}`)?.getAttribute('data-selected') === '1'), domId(id));
+
+// Select an element on the mobile stage. One clean retry: Showit's selection can lag behind clicks.
 async function select(page, id) {
   checkStop();
+  await showLayers(page);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await (id.split('.').length > 3 ? selectChild(page, id) : selectTop(page, id));
+    } catch (e) {
+      if (attempt >= 2 || /Stopped by you/.test(e.message)) throw e;
+      await page.keyboard.press('Escape');
+      await leaveGroup(page);
+      await page.waitForTimeout(600);
+    }
+  }
+}
+
+async function selectTop(page, id) {
+  await leaveGroup(page);
   const el = page.locator(`#si_element_mobile_${domId(id)}`);
+  if (await isSelected(page, id)) return; // clicking a selected group would open it
   // Element hitboxes and layer rows only exist for the active section; clicking the section activates it.
   // Shared sections take two clicks: page -> "Main Site" set -> the section itself.
   for (let i = 0; i < 3 && !(await el.count()); i++) {
@@ -122,19 +158,78 @@ async function select(page, id) {
   // Pick via the layers panel row (stage hitboxes can be covered by overlapping elements).
   // The row only exists once its section is expanded in the layers panel; a click into the
   // section on stage expands it (even if that click lands on an overlapping neighbour).
-  const ROW = { has: ['id'], is: { layerType: ['element'], id: [id] }, attr: 'data-ai-target' };
-  if (!(await page.evaluate(liveComponents, ROW)).length) {
+  const ROW = { has: ['id'], is: { layerType: ['element', 'group'], id: [id] }, attr: 'data-ai-target' };
+  if (!(await page.evaluate(liveComponents, ROW)).length && await el.count()) {
     await click(page, el);
     await page.waitForTimeout(600);
     await page.evaluate(liveComponents, ROW);
   }
-  const row = page.locator('[data-ai-target]');
-  if (await row.count()) await click(page, row);
-  for (let i = 0; i < 3 && (await el.getAttribute('data-selected')) !== '1'; i++) {
-    await click(page, el); // fallback: click on stage
+  await clickRow(page, page.locator('[data-ai-target]'));
+  for (let i = 0; i < 3 && !(await isSelected(page, id)); i++) {
+    const p = await visiblePoint(page, `#si_element_mobile_${domId(id)}`); // fallback: click on stage
+    if (p) await click(page, p);
     await page.waitForTimeout(500);
   }
-  if ((await el.getAttribute('data-selected')) !== '1') throw new Error(`could not select ${id}`);
+  if (!(await isSelected(page, id))) throw new Error(`could not select ${id}`);
+}
+
+// Click a layers-panel row on its top line: a group's row also contains its children's rows.
+async function clickRow(page, row) {
+  if (!(await row.count())) return false;
+  // Rows low in the list sit under Showit's footer bar until scrolled into the middle.
+  await row.evaluate(e => e.scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(300);
+  const rb = await row.boundingBox();
+  if (rb) await click(page, { x: rb.x + rb.width / 2, y: rb.y + Math.min(rb.height / 2, 12) });
+  return !!rb;
+}
+
+// A point on the mobile stage where this hitbox is really the thing under the mouse: inside the
+// visible stage and not covered by another element (overlapping cards, groups half off-screen).
+async function visiblePoint(page, sel) {
+  const el = page.locator(sel);
+  if (!(await el.count())) return null;
+  await el.scrollIntoViewIfNeeded().catch(() => {});
+  return page.evaluate(sel => {
+    const g = document.querySelector(sel), st = document.querySelector('[data-intercom-target="mobile stage"]')?.getBoundingClientRect();
+    if (!g || !st) return null;
+    const r = g.getBoundingClientRect();
+    const fs = [0.5, 0.3, 0.7, 0.15, 0.85];
+    for (const fy of fs) for (const fx of fs) {
+      const x = r.x + r.width * fx, y = r.y + r.height * fy;
+      if (x < st.x + 2 || x > st.right - 2 || y < st.y + 2 || y > st.bottom - 2) continue;
+      const t = document.elementFromPoint(x, y);
+      const hit = t?.closest('[id^="si_element_mobile_"]');
+      if (hit === g || g.contains(t) || (!hit && /transformer/.test(String(t?.className?.baseVal ?? t?.className)))) return { x, y };
+    }
+    return null;
+  }, sel);
+}
+
+// Inside a group: via the child's own layers row when the list shows it; otherwise open the group
+// (double-click a visible part of it: Showit's group focus) and click a visible part of the child.
+async function selectChild(page, id) {
+  const el = page.locator(`#si_element_mobile_${domId(id)}`);
+  if (await isSelected(page, id)) return;
+  const gid = id.split('.').slice(0, 3).join('.');
+  if (!(await el.count())) await selectTop(page, gid); // activates the section and its layers
+  const ROW = { has: ['elemKey'], is: { layerType: ['element'], elemKey: [id] }, attr: 'data-ai-target' };
+  const viaRow = async () => (await page.evaluate(liveComponents, ROW)).length && clickRow(page, page.locator('[data-ai-target]'));
+  if (await viaRow()) { await page.waitForTimeout(600); if (await isSelected(page, id)) return; }
+  if (!(await el.count())) {
+    const p = await visiblePoint(page, `#si_element_mobile_${domId(gid)}`);
+    if (!p) throw new Error(`could not select ${id}`);
+    await moveTo(page, p);
+    await page.mouse.dblclick(p.x, p.y);
+    await page.waitForTimeout(800);
+  }
+  for (let i = 0; i < 3 && !(await isSelected(page, id)); i++) {
+    if (await viaRow()) { await page.waitForTimeout(600); continue; }
+    const p = await visiblePoint(page, `#si_element_mobile_${domId(id)}`);
+    if (p) await click(page, p);
+    await page.waitForTimeout(500);
+  }
+  if (!(await isSelected(page, id))) throw new Error(`could not select ${id}`);
 }
 
 // Type a value into a properties-panel field. `labels`: one label or alternatives.
@@ -152,6 +247,7 @@ async function setField(page, section, labels, value, expected) {
     input = await find();
   }
   if (!input) throw new Error(`field ${labels} not found in ${section}`);
+  if (await input.isDisabled()) throw new Error(`field ${labels} is disabled in ${section}`); // e.g. a group's size
   // Panels have a phone/desktop view tab (si-toggle, selected 0 = phone). Showit remembers the last
   // one used, so switch any that show desktop back to phone. View only; the checks below still apply.
   const tabs = page.locator('si-toggle.split-merge-toggle');
@@ -176,15 +272,46 @@ async function setField(page, section, labels, value, expected) {
 
 const current = (el, k, theme) => (k === 'size' ? textSize(el, theme) : el.mobile[k]);
 
+// Lock or unlock an element with the lock button on its layers row. The tool only unlocks to make an
+// edit and locks it again right after, so the designer's locks stay as they were.
+async function setLock(page, id, locked) {
+  await showLayers(page);
+  const child = id.split('.').length > 3;
+  const ROW = child
+    ? { has: ['elemKey'], is: { layerType: ['element'], elemKey: [id] }, attr: 'data-ai-target' }
+    : { has: ['id'], is: { layerType: ['element', 'group'], id: [id] }, attr: 'data-ai-target' };
+  if (!(await page.evaluate(liveComponents, ROW)).length) {
+    await click(page, page.locator(`#si_block_mobile_${id.split('.')[0]}`)); // a section's rows show once it's active
+    await page.waitForTimeout(800);
+    if (!(await page.evaluate(liveComponents, ROW)).length) throw new Error(`could not find the layers row of ${id} to unlock it`);
+  }
+  const row = page.locator('[data-ai-target]');
+  await row.evaluate(e => e.scrollIntoView({ block: 'center' }));
+  await row.hover();
+  await click(page, row.locator('button[class*="lock-icon"]').first());
+  await page.waitForTimeout(700);
+  const m = await readModel(page);
+  if (!!findEl(m, id)?.lockEditing !== locked) throw new Error(`could not ${locked ? 'lock' : 'unlock'} ${id}`);
+  log({ page: m.page.name, id, note: locked ? 'locked again' : 'unlocked to edit', ok: true });
+  return m;
+}
+
 // Set mobile values on one element, then verify mobile changed and desktop still looks the same.
 // Returns the fresh model. On a failed check: undoes what it typed and throws.
 async function applyMobile(page, model, id, target, note = '') {
   const before = findEl(model, id);
   if (!before) throw new Error(`element ${id} not found on page "${model.page.name}"`);
-  if (before.lockEditing) throw new Error(`element ${id} is locked in Showit; unlock it to edit`);
   const changes = Object.entries(target).map(([k, v]) => [k, Math.round(v)])
     .filter(([k, v]) => current(before, k, model.theme) !== v);
   if (!changes.length) return model;
+  // Locked (by the designer, or its group is): unlock for this edit, lock again afterwards.
+  const gid = id.split('.').slice(0, 3).join('.');
+  const lockId = before.lockEditing ? id : gid !== id && findEl(model, gid)?.lockEditing ? gid : null;
+  if (lockId) {
+    model = await setLock(page, lockId, false);
+    try { return await applyMobile(page, model, id, target, note); }
+    finally { await setLock(page, lockId, true); }
+  }
   await select(page, id);
   let typed = 0, err;
   try {
@@ -220,6 +347,7 @@ const showing = (page, block) => page.locator('input').evaluateAll((els, n) => e
 // Mobile section height: select the section (canvas) and type into its height field.
 async function setSectionHeight(page, model, blockId, h, note = '') {
   checkStop();
+  await leaveGroup(page);
   const block = model.blocks.find(b => b.id === blockId);
   h = Math.round(h);
   if (block.mobile.h === h) return model;

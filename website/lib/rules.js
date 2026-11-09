@@ -12,7 +12,8 @@ const MIN_HERO = 480; // px; ponytail: one phone screen (568) minus browser bars
 function measureInk() {
   const out = {};
   for (const el of document.querySelectorAll('[id^="si_element_"]')) {
-    const m = el.id.match(/^si_element_(.+)_elements_(\d+)$/);
+    // Top-level element (block_elements_3) or a child inside a group (block_elements_3_elements_<child id>).
+    const m = el.id.match(/^si_element_(.+?)_elements_(\d+)(?:_elements_(.+))?$/);
     if (!m || !el.innerText.trim() || !el.offsetWidth) continue;
     const box = el.getBoundingClientRect();
     const s = box.width / el.offsetWidth; // preview is CSS-scaled by the editor zoom
@@ -20,7 +21,7 @@ function measureInk() {
     r.selectNodeContents(el);
     const c = r.getBoundingClientRect();
     const lines = new Set([...r.getClientRects()].filter(q => q.height).map(q => Math.round(q.top / s / 4))).size;
-    out[`${m[1]}.elements.${m[2]}`] = { dx: (c.x - box.x) / s, dy: (c.y - box.y) / s, w: c.width / s, h: c.height / s, lines };
+    out[`${m[1]}.elements.${m[2]}${m[3] ? `.elements.${m[3]}` : ''}`] = { dx: (c.x - box.x) / s, dy: (c.y - box.y) / s, w: c.width / s, h: c.height / s, lines };
   }
   return out;
 }
@@ -57,10 +58,33 @@ function wrapFix(m, k, align, size) {
 
 function audit({ blocks, theme, ink = {} }) {
   const issues = [];
-  const idOf = (b, e) => `${b.id}.elements.${b.elements.indexOf(e)}`;
+  const idOf = (b, e) => e._id ?? `${b.id}.elements.${b.elements.indexOf(e)}`;
+  // Groups: Showit stores a group's children relative to the group. Check the children like any other
+  // element, in page coordinates, and convert their fixes back to the group's coordinates.
+  const offs = new Map(); // child id -> group's mobile position
+  const flat = b => (b.elements || []).flatMap((e, i) => {
+    const id = `${b.id}.elements.${i}`;
+    if (e.type !== 'group' || !e.elements || !onMobile(e)) return [{ ...e, _id: id }];
+    const g = e.mobile || {}, gd = e.desktop || {};
+    const at = (r, o) => r && { ...r, x: (r.x || 0) + (o.x || 0), y: (r.y || 0) + (o.y || 0) };
+    const kids = (e.elementOrder || Object.keys(e.elements)).filter(c => e.elements[c]).map(c => {
+      const k = e.elements[c], kid = `${id}.elements.${c}`;
+      offs.set(kid, { x: g.x || 0, y: g.y || 0 });
+      return { ...k, _id: kid, _child: true, lockEditing: k.lockEditing || e.lockEditing, mobile: at(k.mobile, g), desktop: at(k.desktop, gd) };
+    });
+    return [{ ...e, _id: id }, ...kids];
+  });
+  const rel = (id, f) => {
+    const o = offs.get(id);
+    if (!o || !f) return f;
+    const r = { ...f };
+    if ('x' in r) r.x -= o.x;
+    if ('y' in r) r.y -= o.y;
+    return r;
+  };
   // fix: mobile values to set (x/y/w/h/size/sectionH); null = report only
   const add = (block, el, problem, fix = null) => {
-    if (fix && el?.lockEditing) { problem += ', locked in Showit, skipped'; fix = null; } // respect locks
+    if (fix && el) { fix = rel(idOf(block, el), fix); if (fix.also) fix.also = fix.also.map(a => ({ ...a, fix: rel(a.id, a.fix) })); }
     issues.push({
       block: block.name.trim(),
       shared: !!block.canvasSet, // Header/Footer etc: edited in "Main Site", applies to every page
@@ -76,7 +100,7 @@ function audit({ blocks, theme, ink = {} }) {
   };
 
   for (const b of blocks.filter(onMobile)) {
-    const els = (b.elements || []).filter(onMobile);
+    const els = flat(b).filter(onMobile);
     const bh = b.mobile?.h;
     // Photo hero (full screen on desktop, only a background in it) squashed into a strip on mobile.
     const bgOnly = els.length && els.every(e => e.type === 'graphic' && e.desktop && b.desktop?.h && e.desktop.w >= 0.9 * DESKTOP_W && e.desktop.h >= 0.9 * b.desktop.h);
@@ -101,12 +125,14 @@ function audit({ blocks, theme, ink = {} }) {
       // Text: judge by where the letters are; a box hanging off screen with its text inside is harmless.
       const k0 = e.type === 'text' ? ink[idOf(b, e)] : null;
       const left = k0 ? m.x + k0.dx : m.x, right = k0 ? m.x + k0.dx + k0.w : m.x + m.w;
-      if (left < -0.5 || right > MOBILE_W + 0.5) {
+      // Group children move with their group: the group itself is checked for this.
+      if (!e._child && (left < -0.5 || right > MOBILE_W + 0.5)) {
         const spill = Math.max(-left, right - MOBILE_W);
         // Letters that fit on one screen are a real bug however far they spill (a heading pushed off the side).
         // Anything sitting inside the canvas on desktop but off it on mobile was knocked out of place.
         const inOnDesktop = d && d.x >= -2 && d.x + d.w <= DESKTOP_W + 2;
-        const nudge = inOnDesktop || e.type === 'text' && (spill <= MAX_NUDGE || right - left <= MOBILE_W);
+        // A group can only be moved (Showit locks its size): wider than the screen means its insides need laying out.
+        const nudge = !(e.type === 'group' && m.w > MOBILE_W) && (inOnDesktop || e.type === 'text' && (spill <= MAX_NUDGE || right - left <= MOBILE_W));
         // Slide back on screen keeping the width (no new wrapping); shrink only if wider than the screen.
         const fix = m.w <= MOBILE_W ? { x: Math.min(Math.max(0, m.x), MOBILE_W - m.w) }
           : { x: Math.max(0, m.x), w: Math.min(m.x + m.w, MOBILE_W) - Math.max(0, m.x) };
@@ -114,14 +140,14 @@ function audit({ blocks, theme, ink = {} }) {
         const dx = fix.x - m.x;
         if (e.type === 'text' && !fix.w && dx) {
           const col = els.filter(o => o !== e && o.type === 'text' && o.mobile && Math.abs(o.mobile.x - m.x) < 1.5);
-          if (col.length && col.every(o => o.mobile.x + dx >= 0 && !o.lockEditing))
+          if (col.length && col.every(o => o.mobile.x + dx >= 0))
             fix.also = col.map(o => ({ id: idOf(b, o), fix: { x: o.mobile.x + dx } }));
         }
         add(b, e, `off screen sideways (x ${Math.round(left)} to ${Math.round(right)}, screen is 0 to ${MOBILE_W})${nudge ? '' : ', looks intentional, skipped'}`,
           nudge ? fix : null);
       }
       // Text past the section bottom is a bug (often after we push it down); images doing it are usually design.
-      if (bh > 1 && m.y + m.h > bh) add(b, e, `sticks out below section (bottom ${m.y + m.h}, section height ${bh})`,
+      if (!e._child && bh > 1 && m.y + m.h > bh) add(b, e, `sticks out below section (bottom ${m.y + m.h}, section height ${bh})`,
         e.type === 'text' && m.y + m.h - bh <= MAX_NUDGE ? { sectionH: m.y + m.h + MIN_GAP } : null);
       if (e.type === 'text') {
         const s = textSize(e, theme);
@@ -141,15 +167,33 @@ function audit({ blocks, theme, ink = {} }) {
           add(b, e, `text wraps past its box (${k.lines} lines need ${Math.ceil(k.dy + k.h)}px, box is ${m.h}px)`
             + (k.w > MOBILE_W ? ', wider than the screen, looks intentional, skipped' : ''), // giant background lettering
             k.w > MOBILE_W ? null : wrapFix(m, k, textAlign(e, theme), s));
+        // A paragraph squeezed into a narrow column: a desktop multi-column layout shrunk onto the phone.
+        // The section needs laying out again (fix.js rebuilds it).
+        if (k && !e.wp && k.lines >= 3 && m.w < 0.55 * MOBILE_W)
+          add(b, e, `text squeezed into a ${Math.round(m.w)}px column (${k.lines} lines), the section needs a phone layout`);
       }
     }
     // WordPress dynamic text (e.wp) is placeholder in the editor; its real size varies, so skip layout checks.
     const texts = els.filter(e => e.type === 'text' && e.mobile && !e.wp);
+    // Text covered by a shape, photo or button on mobile that it isn't touching on desktop: a layout
+    // that was never done for phones (e.g. a box added on desktop lands on top of the text on mobile).
+    const solids = els.filter(e => !['text', 'line', 'group'].includes(e.type) && e.mobile && e.desktop?.w);
+    for (const t of texts.filter(t => t.desktop?.w))
+      for (const o of solids)
+        if (overlap(inkRect(b, t), o.mobile) && !overlap(t.desktop, o.desktop)) {
+          add(b, t, `covered by a ${o.type === 'simple' ? 'shape' : o.type} on mobile (not on desktop)`);
+          break;
+        }
     const push = new Map(); // lower element -> [px needed, gap]; one fix each, for the tightest gap
     for (let i = 0; i < texts.length; i++)
       for (let j = i + 1; j < texts.length; j++) {
         const a = inkRect(b, texts[i]), c = inkRect(b, texts[j]);
-        if (overlap(a, c)) { add(b, texts[i], `overlaps text "${plain(texts[j].content?.text).slice(0, 30)}"`); continue; }
+        if (overlap(a, c)) {
+          // Text layered on text on desktop too (a word over a big decorative title) is the design.
+          const designed = texts[i].desktop?.w && texts[j].desktop?.w && overlap(texts[i].desktop, texts[j].desktop);
+          if (!designed) add(b, texts[i], `overlaps text "${plain(texts[j].content?.text).slice(0, 30)}"`);
+          continue;
+        }
         if (!(a.x < c.x + c.w && c.x < a.x + a.w)) continue; // not stacked
         // Crowding only matters for small print; big headings sitting tight are a design choice.
         if (Math.max(textSize(texts[i], theme), textSize(texts[j], theme)) > 14) continue;
@@ -165,7 +209,6 @@ function audit({ blocks, theme, ink = {} }) {
       row.forEach(o => moved.add(o));
       const px = Math.max(...row.map(o => push.get(o)?.[0] ?? 0));
       const mates = row.filter(o => o !== el);
-      if (mates.some(o => o.lockEditing)) { add(b, el, `too close to text above (gap ${gap.toFixed(1)}px); its row has a locked element`); continue; }
       add(b, el, `too close to text above (gap ${gap.toFixed(1)}px)${mates.length ? ', row moved together' : ''}`,
         { y: el.mobile.y + px, ...(mates.length ? { also: mates.map(o => ({ id: idOf(b, o), fix: { y: o.mobile.y + px } })) } : {}) });
     }

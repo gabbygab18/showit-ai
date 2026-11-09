@@ -8,6 +8,18 @@ const { rebuild } = require('./rebuild');
 const { FIELD, RUN, eachPage, toPage, select, findEl, applyMobile, setSectionHeight, say, log, readLog } = require('./editor');
 
 const key = i => i.id + JSON.stringify(i.fix);
+// Plain-language reason for a failed edit (the raw error is logged too, for debugging).
+const reason = e => {
+  const m = e.message;
+  if (e.name === 'TimeoutError') return "Showit didn't respond in time";
+  if (/could not select/.test(m)) return "Showit wouldn't let the tool select it (grouped, hidden or covered)";
+  if (/not found in/.test(m)) return "Showit didn't show the field needed to change it";
+  if (/is disabled in/.test(m)) return "Showit doesn't allow changing that here (a group's size, for example)";
+  if (/locked/.test(m)) return 'it is locked in Showit';
+  if (/expected mobile value/.test(m)) return 'Showit showed a different value than expected, so nothing was typed';
+  if (/check failed/.test(m)) return "the change didn't take or touched desktop, so it was undone";
+  return m.split('\n')[0];
+};
 // Report-only problems in one section (overlaps, spills...), as comparable strings.
 const problems = (model, blockId) => audit(model).filter(x => !x.fix && x.id.split('.')[0] === blockId)
   .map(x => `${x.what}: ${x.problem.split(' (')[0]}`);
@@ -69,8 +81,8 @@ async function main(page) {
             if (/Stopped by you/.test(e.message)) throw e;
             failed++;
             reverted.add(key(i));
-            const why = e.message.split('\n')[0];
-            log({ page: name, id: i.id, note: `skip next time: ${why}`, skip: key(i) });
+            const why = reason(e);
+            log({ page: name, id: i.id, note: `skip next time: ${why}`, skip: key(i), error: e.message.split('\n')[0] });
             console.log(`  could not edit it (${why}). Left for a human.`);
             await page.keyboard.press('Escape').catch(() => {});
             await toPage(page).catch(() => {});
@@ -87,19 +99,20 @@ async function main(page) {
     let model = await readModel(page);
     const was = rebuilt;
     const stuck = [...new Set(audit(model)
-      .filter(i => (!i.fix || reverted.has(key(i))) && !i.shared && !/intentional|locked/.test(i.problem))
+      .filter(i => (!i.fix || reverted.has(key(i))) && !/intentional|locked/.test(i.problem))
       .map(i => i.id.split('.')[0]))];
     for (const id of stuck) {
       const block = model.blocks.find(b => b.id === id);
-      // A section with mobile-only elements has a hand-made mobile layout: keep it, report instead.
-      if (!block || block.elements.some(e => e.visible === 'm')) continue;
+      // A header floating over the page (height ~0) holds the menu: too easy to break, report instead.
+      if (!block || (block.canvasSet && block.mobile?.h <= 1)) continue;
       try {
         model = await rebuild(page, model, block, true);
         rebuilt++;
       } catch (e) {
         if (/Stopped by you/.test(e.message)) throw e;
         failed++;
-        console.log(`  could not rebuild ${block.name.trim()} (${e.message.split('\n')[0]}). Left for a human.`);
+        console.log(`  could not rebuild ${block.name.trim()} (${reason(e)}). Left for a human.`);
+        log({ page: name, id: block.id, note: `rebuild failed: ${reason(e)}`, error: e.message.split('\n')[0] });
         await page.keyboard.press('Escape').catch(() => {});
         await toPage(page).catch(() => {});
         model = await readModel(page);

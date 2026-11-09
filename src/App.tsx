@@ -553,7 +553,7 @@ function IssuesScreen({ issues, status, running, start }: Ctx) {
         <section className="surface p-4">
           <p className="text-xs text-muted-foreground">{show === "all" ? "Everything found" : show === "fix" ? "The app can fix these" : "These need a person in Showit"}</p>
           <p className="text-[15px] font-semibold text-ink">{list.length ? `${list.length} item${list.length === 1 ? "" : "s"}` : "Nothing here"}</p>
-          <Path items={list.map((i) => ({ icon: issueIcon(i.problem), title: i.what.replace(/^text /, ""), sub: i.problem.split(";")[0] }))} />
+          <Path items={list.map((i) => ({ icon: issueIcon(i.problem), title: i.what.replace(/^text /, ""), sub: i.problem.replace(/; /g, " · ") }))} />
         </section>
       )}
       {status.showit && !running && (

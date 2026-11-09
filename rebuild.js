@@ -22,11 +22,27 @@ const textBoxH = k => Math.ceil(k.dy + k.h) + 2;
 //   one:  a single element, full width (text) or scaled (media)
 //   row:  small non-text items side by side on desktop (stars, social icons) stay side by side
 //   over: a photo plus the text laid over it on desktop; the text stays on the photo
-function plan(block, ink = {}, top = PAD) {
-  const items = block.elements.map((e, i) => ({ e, id: `${block.id}.elements.${i}` }))
-    .filter(({ e }) => e.visible === 'a' && e.desktop && e.mobile && !e.lockEditing);
+//   group: a Showit group (a card: photo + title + text...). Its insides are laid out the same way,
+//          in the group's own coordinates, then the group is moved (Showit won't resize a group).
+// o: { left, width } of the column (default: the screen minus margins); inner: laying out a group's insides;
+//    byMobile: the section has a hand-made phone layout (mobile-only elements), so follow the phone's order.
+function plan(block, ink = {}, top = PAD, o = {}) {
+  const L = o.left ?? M, W = o.width ?? CW;
+  const mobileOnly = block.elements.filter(e => e.visible === 'm').length;
+  if (o.byMobile) {
+    // Read the phone layout as if it were the desktop one (scaled up), mobile-only elements included.
+    const S = DESKTOP_W / MOBILE_W;
+    const virt = e => ({
+      ...e, visible: e.visible === 'm' ? 'a' : e.visible,
+      desktop: e.mobile && { ...e.desktop, x: (e.mobile.x || 0) * S, y: (e.mobile.y || 0) * S, w: e.mobile.w * S, h: e.mobile.h * S },
+      ...(e.elements ? { elements: Object.fromEntries(Object.entries(e.elements).map(([k, c]) => [k, virt(c)])) } : {}),
+    });
+    block = { ...block, desktop: { ...block.desktop, h: (block.mobile?.h || 0) * S }, elements: block.elements.map(virt) };
+  }
+  const items = block.elements.map((e, i) => ({ e, id: e._id ?? `${block.id}.elements.${i}` }))
+    .filter(({ e }) => e.visible === 'a' && e.desktop && e.mobile); // locked ones too: applyMobile unlocks and re-locks
   const dh = block.desktop.h;
-  const isBg = ({ e }) => e.type === 'graphic' && e.desktop.w >= 0.9 * DESKTOP_W && e.desktop.h >= 0.9 * dh;
+  const isBg = ({ e }) => !o.inner && e.type === 'graphic' && e.desktop.w >= 0.9 * DESKTOP_W && e.desktop.h >= 0.9 * dh;
   const bg = items.filter(isBg);
   const rest = items.filter(x => !isBg(x));
   // Text whose middle sits on a (clearly bigger) photo on desktop belongs to that photo.
@@ -57,9 +73,9 @@ function plan(block, ink = {}, top = PAD) {
       // Keep the row: each item at its mobile size (or half its desktop size), shrunk together if too wide.
       const sizes = r.map(({ e: { mobile: m, desktop: d } }) => (m.w > 0 && m.h > 0 ? [m.w, m.h] : [d.w / 2, d.h / 2]));
       const total = sizes.reduce((s, [w]) => s + w, 0) + ROW_GAP * (r.length - 1);
-      const k = Math.min(1, CW / total);
+      const k = Math.min(1, W / total);
       const h = Math.round(Math.max(...sizes.map(([, sh]) => sh)) * k);
-      let x = Math.round((MOBILE_W - total * k) / 2);
+      let x = Math.round(L + (W - total * k) / 2);
       const steps = r.map(({ e, id }, i) => {
         const w = Math.round(sizes[i][0] * k), sh = Math.round(sizes[i][1] * k);
         const step = { id, type: e.type, target: { x, y: y + Math.round((h - sh) / 2), w, h: sh } };
@@ -72,18 +88,33 @@ function plan(block, ink = {}, top = PAD) {
     }
     for (const g of r) {
       const { e, id } = g, d = e.desktop;
+      if (e.type === 'group' && e.elements) {
+        const kids = (e.elementOrder || Object.keys(e.elements)).filter(c => e.elements[c])
+          .map(c => ({ ...e.elements[c], _id: `${id}.elements.${c}` }));
+        const inner = plan({ id, desktop: { h: d.h }, mobile: {}, elements: kids }, ink, 0, { left: 0, width: W, inner: true, groupW: d.w, byMobile: o.byMobile });
+        const h = Math.max(1, inner.innerH);
+        units.push({ kind: 'group', y, h, id, inner: inner.units, steps: [...inner.steps, { id, type: 'group', target: { x: L, y, w: W, h } }] });
+        y += h + GAP;
+        continue;
+      }
       let w, h, x;
       // Text wider than the whole desktop canvas is a marquee/decoration: keep its mobile size, only move it.
       const keep = e.type === 'text' && d.w > DESKTOP_W;
       if (keep) {
         ({ x, w, h } = e.mobile);
       } else if (e.type === 'text') {
-        w = CW; x = M; h = textH(id, e, w);
+        w = W; x = L; h = textH(id, e, w);
+      } else if (o.byMobile) {
+        // Hand-made phone layout: keep the designer's phone size, just fit it in the column.
+        w = Math.round(Math.min(W, e.mobile.w));
+        h = e.type === 'line' ? e.mobile.h : Math.round(e.mobile.h * w / e.mobile.w);
+        x = Math.round(L + (W - w) / 2);
       } else {
-        const big = MEDIA.includes(e.type) && d.w >= 400;
-        w = Math.round(big ? CW : Math.min(CW, MEDIA.includes(e.type) ? Math.max(100, d.w * 0.6) : d.w));
+        // Big photos go full width; in a card (group), so does its main photo.
+        const big = MEDIA.includes(e.type) && (d.w >= 400 || (o.groupW && d.w >= 0.6 * o.groupW));
+        w = Math.round(big ? W : Math.min(W, MEDIA.includes(e.type) ? Math.max(100, d.w * 0.6) : d.w));
         h = e.type === 'line' ? e.mobile.h : Math.round(d.h * w / d.w); // line h = stroke weight, keep
-        x = Math.round((MOBILE_W - w) / 2);
+        x = Math.round(L + (W - w) / 2);
       }
       const steps = [{ id, type: e.type, keep, target: { x, y, w, h } }];
       const over = rest.filter(t => host.get(t) === g).sort((a, b) => a.e.desktop.y - b.e.desktop.y);
@@ -103,9 +134,9 @@ function plan(block, ink = {}, top = PAD) {
   const sectionH = units.length ? Math.max(y - GAP + PAD, 100)
     : Math.max(block.mobile?.h || 0, Math.round(dh * MOBILE_W / DESKTOP_W), block.desktop.nature === 'wH' ? MIN_HERO : 0);
   return {
-    units, steps: units.flatMap(u => u.steps), sectionH,
+    units, steps: units.flatMap(u => u.steps), sectionH, innerH: units.length ? y - GAP - top : 0,
     bg: bg.map(({ id }) => ({ id, target: { x: 0, y: 0, w: MOBILE_W, h: sectionH } })),
-    mobileOnly: block.elements.filter(e => e.visible === 'm').length,
+    mobileOnly,
   };
 }
 
@@ -129,20 +160,43 @@ async function rebuild(page, model, block, apply) {
   const first = model.blocks.filter(b => !b.canvasSet)[0] === block;
   const headerBottom = first && header ? Math.max(0, ...header.elements.filter(e => e.visible !== 'd' && e.mobile).map(e => e.mobile.y + e.mobile.h)) : 0;
   const top = Math.max(PAD, headerBottom + 24);
-  const p = plan(block, model.ink, top);
+  const p = plan(block, model.ink, top, { byMobile: block.elements.some(e => e.visible === 'm') });
   const name = block.name.trim();
   const locked = block.elements.filter(e => e.lockEditing && e.visible === 'a').length;
   console.log(`${name}: ${p.steps.length} element(s) laid out, ${p.bg.length} background(s), section height ~${p.sectionH}` +
-    (p.mobileOnly ? `; ${p.mobileOnly} mobile-only element(s) left as is` : '') + (locked ? `; ${locked} locked element(s) left as is` : ''));
+    (p.mobileOnly ? `; has ${p.mobileOnly} mobile-only element(s), so the phone's order is kept` : '') + (locked ? `; ${locked} locked element(s) are unlocked for the edit and locked again` : ''));
   if (!apply) {
     for (const s of p.steps) console.log(`  ${s.id} ${s.type} -> ${JSON.stringify(s.target)}`);
     await say(page, `Plan for ${name}: ${p.steps.length} elements, height ~${p.sectionH}px. Add --apply to rebuild.`);
     return model;
   }
   const note = `rebuild ${name}`;
+  let y;
+  [model, y] = await layOut(page, model, p.units, top, note, name);
+  const sectionH = p.units.length ? Math.max(y - GAP + PAD, 100) : p.sectionH;
+  model = await setSectionHeight(page, model, block.id, sectionH, note);
+  for (const b of p.bg) model = await applyMobile(page, model, b.id, { ...b.target, h: sectionH }, note);
+  await say(page, `${name} rebuilt for mobile.`);
+  console.log(`  done, section height ${sectionH}. Undo with: node restore.js ${RUN}`);
+  return model;
+}
+
+// Places units top to bottom from `top` (live: text heights are measured as we go). Returns [model, bottom].
+async function layOut(page, model, units, top, note, name) {
   let y = top, n = 0;
-  for (const u of p.units) {
-    await say(page, `Laying out ${name}: ${++n}/${p.units.length}`);
+  for (const u of units) {
+    if (name) await say(page, `Laying out ${name}: ${++n}/${units.length}`);
+    if (u.kind === 'group') {
+      // Move the group into place first (on screen, so it can be opened), lay out its insides in its
+      // own coordinates, then put it back in place (its box can shift as its insides change).
+      const g = u.steps[u.steps.length - 1].target;
+      model = await applyMobile(page, model, u.id, { x: g.x, y }, note);
+      let bottom;
+      [model, bottom] = await layOut(page, model, u.inner, 0, note);
+      model = await applyMobile(page, model, u.id, { x: g.x, y }, note);
+      y += Math.max(bottom - GAP, 1) + GAP;
+      continue;
+    }
     if (u.kind === 'row') {
       for (const s of u.steps) model = await applyMobile(page, model, s.id, { ...s.target, y: y + s.target.y - u.y }, note);
       y += u.h + GAP;
@@ -169,12 +223,7 @@ async function rebuild(page, model, block, apply) {
     }
     y += t.h + GAP;
   }
-  const sectionH = p.units.length ? Math.max(y - GAP + PAD, 100) : p.sectionH;
-  model = await setSectionHeight(page, model, block.id, sectionH, note);
-  for (const b of p.bg) model = await applyMobile(page, model, b.id, { ...b.target, h: sectionH }, note);
-  await say(page, `${name} rebuilt for mobile.`);
-  console.log(`  done, section height ${sectionH}. Undo with: node restore.js ${RUN}`);
-  return model;
+  return [model, y];
 }
 
 function selftest() {
@@ -218,6 +267,31 @@ function selftest() {
     { x: 20, y: 73, w: 280, h: 187 },
     { x: 36, y: 151, w: 248, h: 32 },  // centred on the photo
   ]);
+  // A card (group: photo + caption) keeps its insides together, laid out in the group's own coordinates.
+  const card = { id: 'K', desktop: { h: 800 }, mobile: { h: 600 }, elements: [
+    { type: 'group', visible: 'a', desktop: { x: 100, y: 100, w: 388, h: 557 }, mobile: { x: -40, y: 30, w: 290, h: 424 }, elementOrder: ['i', 't'], elements: {
+      i: { type: 'graphic', visible: 'a', desktop: { x: 0, y: 0, w: 388, h: 480 }, mobile: { x: 0, y: 0, w: 290, h: 390 } },
+      t: { type: 'text', visible: 'a', desktop: { x: 0, y: 496, w: 388, h: 61 }, mobile: { x: 0, y: 405, w: 290, h: 19 } },
+    } },
+  ] };
+  const c = plan(card, { 'K.elements.0.elements.t': { dy: 0, h: 17, w: 190 } });
+  assert.deepStrictEqual(c.units.map(u => u.kind), ['group']);
+  assert.deepStrictEqual(c.steps.map(s => [s.id, s.target]), [
+    ['K.elements.0.elements.i', { x: 0, y: 0, w: 280, h: 346 }],
+    ['K.elements.0.elements.t', { x: 0, y: 362, w: 280, h: 19 }],
+    ['K.elements.0', { x: 20, y: 40, w: 280, h: 381 }],
+  ]);
+  // Hand-made phone layout (a mobile-only element): the phone's order wins and that element is laid out too.
+  const mob = { id: 'P', desktop: { h: 600 }, mobile: { h: 300 }, elements: [
+    { type: 'text', visible: 'a', desktop: { x: 0, y: 0, w: 400, h: 40 }, mobile: { x: 10, y: 200, w: 300, h: 20 } },   // last on phone
+    { type: 'icon', visible: 'm', mobile: { x: 250, y: 10, w: 30, h: 30 } },                                             // mobile-only, first
+  ] };
+  const q2 = plan(mob, {}, 40, { byMobile: true });
+  assert.deepStrictEqual(q2.steps.map(s => [s.id, s.target]), [
+    ['P.elements.1', { x: 145, y: 40, w: 30, h: 30 }],
+    ['P.elements.0', { x: 20, y: 86, w: 280, h: 20 }],
+  ]);
+  assert.strictEqual(q2.mobileOnly, 1);
   console.log('selftest ok');
 }
 
