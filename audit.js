@@ -7,9 +7,11 @@
 // <rules> (this part is also copied into the website's playground: website/scripts/sync-rules.mjs)
 const MOBILE_W = 320;
 const MIN_TEXT = 12; // px; ponytail: fixed threshold, make per-style if it flags intentional captions
-const MAX_NUDGE = 40; // px; text spilling further than this is treated as a deliberate design (marquees etc.)
+const MAX_NUDGE = 40; // px; text spilling further than this whose letters can't fit on screen is a deliberate design (marquees etc.)
 const EDGE = 15; // px; side margin kept when widening text
 const MIN_GAP = 6; // px; minimum vertical breathing room between stacked small texts
+const DESKTOP_W = 1200; // Showit's desktop canvas
+const MIN_HERO = 480; // px; ponytail: one phone screen (568) minus browser bars, make per-site if heroes differ
 // </rules>
 
 // Page model (Immutable.js in React props) + measured text ink from the mobile preview iframe.
@@ -108,23 +110,43 @@ function audit({ blocks, theme, ink = {} }) {
   for (const b of blocks.filter(onMobile)) {
     const els = (b.elements || []).filter(onMobile);
     const bh = b.mobile?.h;
+    // Photo hero (full screen on desktop, only a background in it) squashed into a strip on mobile.
+    const bgOnly = els.length && els.every(e => e.type === 'graphic' && e.desktop && b.desktop?.h && e.desktop.w >= 0.9 * DESKTOP_W && e.desktop.h >= 0.9 * b.desktop.h);
+    if (bgOnly && b.desktop.nature === 'wH' && bh > 1 && bh < MIN_HERO)
+      add(b, null, `photo section only ${bh}px tall on mobile (full screen on desktop)`, { sectionH: MIN_HERO });
     for (const e of els) {
       const m = e.mobile;
       if (!m) { add(b, e, 'no mobile layout'); continue; }
+      const d = e.desktop;
+      // Full-bleed background (covers its section on desktop): on mobile it must cover the section too.
+      if (e.type === 'graphic' && d && b.desktop?.h && d.w >= 0.9 * DESKTOP_W && d.h >= 0.9 * b.desktop.h) {
+        if (bh > 1 && (m.x > 0.5 || m.y > 0.5 || m.x + m.w < MOBILE_W - 0.5 || m.y + m.h < bh - 0.5))
+          add(b, e, `background doesn't cover its section (x ${m.x}, y ${m.y}, ${m.w}×${m.h}; section is ${MOBILE_W}×${bh})`,
+            { x: 0, y: 0, w: MOBILE_W, h: bh }); // same as a rebuild: exactly the section
+        continue;
+      }
+      // Blown-up text (a typo like 1410 for 14): put the desktop size back first; the next pass re-checks the rest.
+      if (e.type === 'text') {
+        const s = textSize(e, theme), ds = e.desktop?.size ?? styleOf(e, theme).desktop?.size;
+        if (ds && s > 2 * ds && s > 60) { add(b, e, `text ${s}px on mobile but ${ds}px on desktop`, { size: ds }); continue; }
+      }
       // Text: judge by where the letters are; a box hanging off screen with its text inside is harmless.
       const k0 = e.type === 'text' ? ink[idOf(b, e)] : null;
       const left = k0 ? m.x + k0.dx : m.x, right = k0 ? m.x + k0.dx + k0.w : m.x + m.w;
       if (left < -0.5 || right > MOBILE_W + 0.5) {
         const spill = Math.max(-left, right - MOBILE_W);
-        const nudge = e.type === 'text' && spill <= MAX_NUDGE;
+        // Letters that fit on one screen are a real bug however far they spill (a heading pushed off the side).
+        // Anything sitting inside the canvas on desktop but off it on mobile was knocked out of place.
+        const inOnDesktop = d && d.x >= -2 && d.x + d.w <= DESKTOP_W + 2;
+        const nudge = inOnDesktop || e.type === 'text' && (spill <= MAX_NUDGE || right - left <= MOBILE_W);
         // Slide back on screen keeping the width (no new wrapping); shrink only if wider than the screen.
         const fix = m.w <= MOBILE_W ? { x: Math.min(Math.max(0, m.x), MOBILE_W - m.w) }
           : { x: Math.max(0, m.x), w: Math.min(m.x + m.w, MOBILE_W) - Math.max(0, m.x) };
         // Text lined up in a column with others: slide the whole column so it stays aligned.
         const dx = fix.x - m.x;
-        if (!fix.w && dx) {
+        if (e.type === 'text' && !fix.w && dx) {
           const col = els.filter(o => o !== e && o.type === 'text' && o.mobile && Math.abs(o.mobile.x - m.x) < 1.5);
-          if (col.every(o => o.mobile.x + dx >= 0 && !o.lockEditing))
+          if (col.length && col.every(o => o.mobile.x + dx >= 0 && !o.lockEditing))
             fix.also = col.map(o => ({ id: idOf(b, o), fix: { x: o.mobile.x + dx } }));
         }
         add(b, e, `off screen sideways (x ${Math.round(left)} to ${Math.round(right)}, screen is 0 to ${MOBILE_W})${nudge ? '' : ', looks intentional, skipped'}`,
@@ -148,8 +170,9 @@ function audit({ blocks, theme, ink = {} }) {
         }
         const k = ink[idOf(b, e)];
         if (k && !e.wp && k.lines > 1 && k.dy + k.h > m.h + 3)
-          add(b, e, `text wraps past its box (${k.lines} lines need ${Math.ceil(k.dy + k.h)}px, box is ${m.h}px)`,
-            wrapFix(m, k, textAlign(e, theme), s));
+          add(b, e, `text wraps past its box (${k.lines} lines need ${Math.ceil(k.dy + k.h)}px, box is ${m.h}px)`
+            + (k.w > MOBILE_W ? ', wider than the screen, looks intentional, skipped' : ''), // giant background lettering
+            k.w > MOBILE_W ? null : wrapFix(m, k, textAlign(e, theme), s));
       }
     }
     // WordPress dynamic text (e.wp) is placeholder in the editor; its real size varies, so skip layout checks.
@@ -218,7 +241,19 @@ function selftest() {
     T('Country:', { x: 10, y: 24, w: 60, h: 15, size: 14 }),    // row 2, tight under row 1...
     T('France', { x: 75, y: 24, w: 60, h: 15, size: 14 }),      // ...moved together with its label
   ] });
+  blocks.push({ id: 'D', name: 'Intro', visible: 'a', mobile: { h: 400 }, desktop: { h: 800 }, elements: [
+    T('Heading', { x: 152, y: 10, w: 320, h: 89, size: 42 }),  // letters spill 138px but fit on screen: slide back
+    T('Huge', { x: 0, y: 120, w: 325, h: 36 }),                // giant background lettering: leave it
+    T('Typo', { x: 0, y: 160, w: 325, h: 36, size: 1410 }, { desktop: { size: 20 } }), // 1410 typed for 14: desktop size back
+    { type: 'graphic', visible: 'a', mobile: { x: -51, y: 200, w: 117, h: 100 }, desktop: { x: 27, y: 0, w: 227, h: 300 } }, // inside on desktop: slide in
+    { type: 'graphic', visible: 'a', mobile: { x: -94, y: 122, w: 320, h: 500 }, desktop: { x: 0, y: 0, w: 1200, h: 800 } }, // knocked-off background
+  ] });
+  blocks.push({ id: 'E', name: 'Hero', visible: 'a', mobile: { h: 114 }, desktop: { h: 812, nature: 'wH' }, elements: [
+    { type: 'graphic', visible: 'a', mobile: { x: 0, y: 0, w: 320, h: 114 }, desktop: { x: 0, y: 0, w: 1200, h: 812 } }, // squashed photo hero
+  ] });
   const ink = {
+    'D.elements.0': { dx: 13, dy: -4, w: 293, h: 90, lines: 2 },
+    'D.elements.1': { dx: 0, dy: -14, w: 13054, h: 5102, lines: 3 },
     'C.elements.0': { dx: 0, dy: 2, w: 60, h: 12, lines: 1 },
     'C.elements.1': { dx: 0, dy: 2, w: 60, h: 12, lines: 1 },
     'C.elements.2': { dx: 0, dy: 2, w: 60, h: 12, lines: 1 },
@@ -254,6 +289,14 @@ function selftest() {
     'B.elements.18 too close to text above {"y":51}',
     'C.elements.0 text 10px, under 12px; at 12px it would run into "Paris", needs a manual layout null',
     'C.elements.2 too close to text above {"y":28,"also":[{"id":"C.elements.3","fix":{"y":28}}]}',
+    'D.elements.0 off screen sideways {"x":0}',
+    'D.elements.1 off screen sideways null',
+    'D.elements.1 text wraps past its box null',
+    'D.elements.2 text 1410px on mobile but 20px on desktop {"size":20}',
+    'D.elements.3 off screen sideways {"x":0}',
+    "D.elements.4 background doesn't cover its section {\"x\":0,\"y\":0,\"w\":320,\"h\":400}",
+    'D.elements.1 overlaps text "Typo" null',
+    'E photo section only 114px tall on mobile {"sectionH":480}',
   ]);
   console.log('selftest ok');
 }

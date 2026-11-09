@@ -45,7 +45,8 @@ function plan(block, ink = {}, top = PAD) {
     y += h + GAP;
     return step;
   });
-  const sectionH = Math.max(y - GAP + PAD, 100);
+  // Only a background (a photo hero): nothing to stack, so keep the section's height instead of collapsing it.
+  const sectionH = flow.length ? Math.max(y - GAP + PAD, 100) : Math.max(block.mobile?.h || 0, Math.round(dh * MOBILE_W / DESKTOP_W));
   return { steps, bg: bg.map(({ id }) => ({ id, target: { x: 0, y: 0, w: MOBILE_W, h: sectionH } })), sectionH,
     mobileOnly: block.elements.filter(e => e.visible === 'm').length };
 }
@@ -79,7 +80,7 @@ async function rebuild(page, model, block, apply) {
     model = await applyMobile(page, model, s.id, t, note);
     y += t.h + GAP;
   }
-  const sectionH = Math.max(y - GAP + PAD, 100);
+  const sectionH = p.steps.length ? Math.max(y - GAP + PAD, 100) : p.sectionH;
   model = await setSectionHeight(page, model, block.id, sectionH, note);
   for (const b of p.bg) model = await applyMobile(page, model, b.id, { ...b.target, h: sectionH }, note);
   await say(page, `${block.name.trim()} rebuilt for mobile.`);
@@ -107,6 +108,9 @@ function selftest() {
   assert.strictEqual(p.sectionH, 456);
   assert.deepStrictEqual(p.bg, [{ id: 'S.elements.0', target: { x: 0, y: 0, w: 320, h: 456 } }]);
   assert.strictEqual(p.mobileOnly, 1);
+  // Photo hero (background only): keeps its height instead of collapsing to the padding.
+  const hero = { id: 'H', desktop: { h: 812 }, mobile: { h: 500 }, elements: [block.elements[0]] };
+  assert.strictEqual(plan(hero, {}, 90).sectionH, 500);
   console.log('selftest ok');
 }
 
