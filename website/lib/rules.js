@@ -26,10 +26,27 @@ function measureInk() {
   return out;
 }
 
-const onMobile = x => x.visible !== 'd';
+// Shown on phones: everywhere ('a') or phone-only ('m'); not desktop-only ('d') or hidden on both ('n').
+const onMobile = x => x.visible !== 'd' && x.visible !== 'n';
 const plain = html => String(html || '').replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 const overlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 const styleOf = (el, theme) => theme.styles?.[el.mobile?.style || el.desktop?.style || 'paragraph'] || {};
+
+// A font size typed by mistake on mobile (1410 for 14): far above desktop. phoneSize: what to put back,
+// the style's phone size (or half the desktop size, at least the minimum).
+const blownUp = (el, theme) => {
+  const s = textSize(el, theme), ds = el.desktop?.size ?? styleOf(el, theme).desktop?.size;
+  return ds && s > 2 * ds && s > 60 ? ds : 0;
+};
+const phoneSize = (el, theme) => {
+  const st = styleOf(el, theme), ds = el.desktop?.size ?? st.desktop?.size;
+  return Math.max(MIN_TEXT, st.mobile?.size ?? (ds ? Math.min(ds, Math.round(ds / 2)) : MIN_TEXT));
+};
+// How much two boxes overlap, as a share of the smaller one (0..1).
+const overlapShare = (a, b) => {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? (w * h) / Math.max(1, Math.min(a.w * a.h, b.w * b.h)) : 0;
+};
 
 function textSize(el, theme) {
   const style = styleOf(el, theme);
@@ -94,6 +111,16 @@ function audit({ blocks, theme, ink = {} }) {
       fix,
     });
   };
+  // Where a text's letters roughly sit on desktop (no desktop measurement: the phone one, scaled by
+  // font size, inside the desktop box, by its alignment). Boxes are often much wider than the words.
+  const deskInk = (b, e) => {
+    const k = ink[idOf(b, e)], d = e.desktop;
+    if (!k) return d;
+    const ms = textSize(e, theme) || 1, ds = e.desktop?.size ?? styleOf(e, theme).desktop?.size ?? ms;
+    const w = Math.min(d.w, (k._mass ?? k.w * Math.max(1, k.lines || 1)) * ds / ms);
+    const al = e.desktop?.tA ?? styleOf(e, theme).desktop?.tA ?? 'left';
+    return { x: d.x + (al === 'center' ? (d.w - w) / 2 : al === 'right' ? d.w - w : 0), y: d.y, w, h: d.h };
+  };
   const inkRect = (b, e) => {
     const k = ink[idOf(b, e)], m = e.mobile;
     return k ? { x: m.x + k.dx, y: m.y + k.dy, w: k.w, h: k.h } : m;
@@ -118,9 +145,9 @@ function audit({ blocks, theme, ink = {} }) {
         continue;
       }
       // Blown-up text (a typo like 1410 for 14): put the desktop size back first; the next pass re-checks the rest.
-      if (e.type === 'text') {
-        const s = textSize(e, theme), ds = e.desktop?.size ?? styleOf(e, theme).desktop?.size;
-        if (ds && s > 2 * ds && s > 60) { add(b, e, `text ${s}px on mobile but ${ds}px on desktop`, { size: ds }); continue; }
+      if (e.type === 'text' && blownUp(e, theme)) {
+        add(b, e, `text ${textSize(e, theme)}px on mobile but ${blownUp(e, theme)}px on desktop`, { size: phoneSize(e, theme) });
+        continue;
       }
       // Text: judge by where the letters are; a box hanging off screen with its text inside is harmless.
       const k0 = e.type === 'text' ? ink[idOf(b, e)] : null;
@@ -179,18 +206,23 @@ function audit({ blocks, theme, ink = {} }) {
     // that was never done for phones (e.g. a box added on desktop lands on top of the text on mobile).
     const solids = els.filter(e => !['text', 'line', 'group'].includes(e.type) && e.mobile && e.desktop?.w);
     for (const t of texts.filter(t => t.desktop?.w))
-      for (const o of solids)
-        if (overlap(inkRect(b, t), o.mobile) && !overlap(t.desktop, o.desktop)) {
+      for (const o of solids) {
+        // Text laid on a photo on desktop (its middle on a bigger picture) stays on it on mobile: design.
+        const d = t.desktop, od = o.desktop, cx = d.x + d.w / 2, cy = d.y + d.h / 2;
+        const onPhoto = cx > od.x && cx < od.x + od.w && cy > od.y && cy < od.y + od.h && od.w * od.h > 1.5 * d.w * d.h;
+        if (!onPhoto && overlap(inkRect(b, t), o.mobile) && overlapShare(d, od) < 0.5 * overlapShare(inkRect(b, t), o.mobile)) {
           add(b, t, `covered by a ${o.type === 'simple' ? 'shape' : o.type} on mobile (not on desktop)`);
           break;
         }
+      }
     const push = new Map(); // lower element -> [px needed, gap]; one fix each, for the tightest gap
     for (let i = 0; i < texts.length; i++)
       for (let j = i + 1; j < texts.length; j++) {
         const a = inkRect(b, texts[i]), c = inkRect(b, texts[j]);
         if (overlap(a, c)) {
           // Text layered on text on desktop too (a word over a big decorative title) is the design.
-          const designed = texts[i].desktop?.w && texts[j].desktop?.w && overlap(texts[i].desktop, texts[j].desktop);
+          // Only when they overlap about as much on desktop: a word moved onto another on mobile is still a bug.
+          const designed = texts[i].desktop?.w && texts[j].desktop?.w && overlapShare(deskInk(b, texts[i]), deskInk(b, texts[j])) >= 0.5 * overlapShare(a, c);
           if (!designed) add(b, texts[i], `overlaps text "${plain(texts[j].content?.text).slice(0, 30)}"`);
           continue;
         }

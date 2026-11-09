@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("sai", {
   stop: () => ipcRenderer.invoke("stop"),
   status: () => ipcRenderer.invoke("status"),
   openShowit: () => ipcRenderer.invoke("open-showit"),
+  openData: () => ipcRenderer.invoke("open-data"),
   sections: () => ipcRenderer.invoke("sections"),
   runs: () => ipcRenderer.invoke("runs"),
   onJob: (cb) => {

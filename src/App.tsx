@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 type Status = { chrome: boolean; showit: boolean; title: string };
 type Run = { run: string; at: string; n: number; pages: string[]; notes: string[] };
 type JobEvent = { type: "line"; text: string } | { type: "end"; code: number };
-type Script = "audit.js" | "fix.js" | "rebuild.js" | "restore.js";
+type Script = "audit.js" | "fix.js" | "rebuild.js" | "restore.js" | "dataset.js";
 type Mode = "panel" | "island";
 
 declare global {
@@ -24,6 +24,7 @@ declare global {
       stop: () => Promise<boolean>;
       status: () => Promise<Status>;
       openShowit: () => Promise<boolean>;
+      openData: () => Promise<string>;
       sections: () => Promise<{ page: string; sections: string[] }>;
       runs: () => Promise<Run[]>;
       onJob: (cb: (e: JobEvent) => void) => () => void;
@@ -369,6 +370,13 @@ function Home({ status, job, lines, issues, runs, mood, running, fixedToday, sta
         <Row icon="pages" title="Check all pages" sub="Every page and blog template" onClick={() => start("audit.js", ["--all"], "Check all pages")} disabled={!ready} />
         <Row icon="scan" title="Preview fixes" sub="Cursor tour in Showit, no edits" onClick={() => start("fix.js", [], "Preview fixes")} disabled={!ready} />
         <Row icon="layers" title="Rebuild a section" sub="Lay it out from the desktop design" onClick={() => { setTarget("section"); go("fix"); }} />
+        <Row
+          icon="box"
+          title="Save layout data"
+          sub="Every page's layout, to send in for accuracy checks"
+          onClick={() => { start("dataset.js", ["--all", "--site", "client"], "Save layout data"); sai?.openData(); }}
+          disabled={!ready}
+        />
         <Row
           icon="rows"
           title="Issues"

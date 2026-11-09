@@ -93,13 +93,13 @@ async function main(page) {
     };
     await passes();
     if (!apply || process.argv.includes('--no-rebuild')) continue;
-    // What a patch can't sort out (text on text, elements Showit won't let us edit, layouts that need
-    // reflowing) gets that section laid out again from its desktop design, then patched once more.
+    // Anything still wrong after the patches (text on text, edits Showit refused, fixes that didn't
+    // take) gets that section laid out again from its desktop design, then patched once more.
     await toPage(page);
     let model = await readModel(page);
     const was = rebuilt;
     const stuck = [...new Set(audit(model)
-      .filter(i => (!i.fix || reverted.has(key(i))) && !/intentional|locked/.test(i.problem))
+      .filter(i => !/intentional|locked/.test(i.problem))
       .map(i => i.id.split('.')[0]))];
     for (const id of stuck) {
       const block = model.blocks.find(b => b.id === id);
@@ -108,6 +108,8 @@ async function main(page) {
       try {
         model = await rebuild(page, model, block, true);
         rebuilt++;
+        // New layout: fixes that were undone in the old one get another chance.
+        for (const k of [...reverted]) if (k.startsWith(id + '.')) reverted.delete(k);
       } catch (e) {
         if (/Stopped by you/.test(e.message)) throw e;
         failed++;

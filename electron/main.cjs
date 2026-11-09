@@ -1,6 +1,6 @@
 // Electron shell for Showit AI: a frameless panel that runs the tool scripts (audit/fix/rebuild/restore)
 // with Electron's own Node, streams their output to the window, and watches the Showit Chrome window.
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen } = require("electron");
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -13,7 +13,7 @@ const TOOL = path.join(__dirname, "..").replace(/app\.asar$/, "app.asar.unpacked
 // Writable data (change log, Showit login profile, stop flag). Dev keeps using the project folder.
 const DATA = DEV ? TOOL : app.getPath("userData");
 process.env.SHOWIT_AI_DATA = DATA;
-const SCRIPTS = new Set(["audit.js", "fix.js", "rebuild.js", "restore.js"]);
+const SCRIPTS = new Set(["audit.js", "fix.js", "rebuild.js", "restore.js", "dataset.js"]);
 const ICON = path.join(__dirname, "..", "build", "icon.png");
 
 let win;
@@ -73,6 +73,13 @@ ipcMain.handle("sections", () =>
 ipcMain.handle("runs", () => {
   delete require.cache[require.resolve(path.join(TOOL, "restore.js"))];
   return require(path.join(TOOL, "restore.js")).runs().reverse();
+});
+
+// Folder where "Save layout data" puts its files (to send in for accuracy checks).
+ipcMain.handle("open-data", () => {
+  const dir = path.join(DATA, "layout-data");
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
 });
 
 ipcMain.handle("open-showit", () =>

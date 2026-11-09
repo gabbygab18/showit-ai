@@ -3,8 +3,14 @@
 //   node rebuild.js "Section name" [--page "About"] --apply   rebuild it (undo with: node restore.js)
 //   node rebuild.js --selftest
 // Desktop is never touched. Mobile-only and locked elements are left where they are.
-const { readModel, textSize, MOBILE_W, MIN_TEXT, MIN_HERO, DESKTOP_W } = require('./audit');
-const { RUN, eachPage, applyMobile, setSectionHeight, findEl, say } = require('./editor');
+const { readModel, textSize, blownUp, phoneSize, MOBILE_W, MIN_TEXT, MIN_HERO, DESKTOP_W } = require('./audit');
+// Editor actions; eval.js swaps in an offline simulator (useEditor) to score layouts without Showit.
+let ed = require('./editor');
+const useEditor = e => { ed = e; };
+const applyMobile = (...a) => ed.applyMobile(...a);
+const setSectionHeight = (...a) => ed.setSectionHeight(...a);
+const findEl = (...a) => ed.findEl(...a);
+const say = (...a) => ed.say(...a);
 
 const M = 20;                 // side margin
 const CW = MOBILE_W - 2 * M;  // content width
@@ -33,7 +39,7 @@ function plan(block, ink = {}, top = PAD, o = {}) {
     // Read the phone layout as if it were the desktop one (scaled up), mobile-only elements included.
     const S = DESKTOP_W / MOBILE_W;
     const virt = e => ({
-      ...e, visible: e.visible === 'm' ? 'a' : e.visible,
+      ...e, visible: e.visible === 'm' ? 'a' : e.visible, _rd: e._rd ?? e.desktop, // _rd: the real desktop box
       desktop: e.mobile && { ...e.desktop, x: (e.mobile.x || 0) * S, y: (e.mobile.y || 0) * S, w: e.mobile.w * S, h: e.mobile.h * S },
       ...(e.elements ? { elements: Object.fromEntries(Object.entries(e.elements).map(([k, c]) => [k, virt(c)])) } : {}),
     });
@@ -45,9 +51,12 @@ function plan(block, ink = {}, top = PAD, o = {}) {
   const isBg = ({ e }) => !o.inner && e.type === 'graphic' && e.desktop.w >= 0.9 * DESKTOP_W && e.desktop.h >= 0.9 * dh;
   const bg = items.filter(isBg);
   const rest = items.filter(x => !isBg(x));
-  // Text whose middle sits on a (clearly bigger) photo on desktop belongs to that photo.
+  // Text whose middle sits on a (clearly bigger) photo on desktop belongs to that photo. Always judged on
+  // the real desktop layout: on a broken phone layout, text lying on a photo is the bug, not the design.
   const on = (t, g) => {
-    const a = t.e.desktop, b = g.e.desktop, cx = a.x + a.w / 2, cy = a.y + a.h / 2;
+    const a = t.e._rd ?? t.e.desktop, b = g.e._rd ?? g.e.desktop;
+    if (!a?.w || !b?.w) return false;
+    const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
     return cx > b.x && cx < b.x + b.w && cy > b.y && cy < b.y + b.h && b.w * b.h > 1.5 * a.w * a.h;
   };
   const host = new Map();
@@ -143,7 +152,9 @@ function plan(block, ink = {}, top = PAD, o = {}) {
 // Live: set a text's width, measure it, and shrink the font if one word is still wider than the box.
 // Returns [model, measured box height].
 async function placeText(page, model, id, x, w, note) {
-  model = await applyMobile(page, model, id, { x, w }, note);
+  const el = findEl(model, id);
+  const fix = blownUp(el, model.theme) ? { size: phoneSize(el, model.theme) } : {}; // a typo'd huge font
+  model = await applyMobile(page, model, id, { x, w, ...fix }, note);
   let k = model.ink[id];
   if (k && k.w > w + 2) {
     const size = textSize(findEl(model, id), model.theme);
@@ -177,7 +188,7 @@ async function rebuild(page, model, block, apply) {
   model = await setSectionHeight(page, model, block.id, sectionH, note);
   for (const b of p.bg) model = await applyMobile(page, model, b.id, { ...b.target, h: sectionH }, note);
   await say(page, `${name} rebuilt for mobile.`);
-  console.log(`  done, section height ${sectionH}. Undo with: node restore.js ${RUN}`);
+  console.log(`  done, section height ${sectionH}. Undo with: node restore.js ${ed.RUN}`);
   return model;
 }
 
@@ -302,7 +313,7 @@ async function main(page) {
   }
   const name = process.argv.slice(2).find((a, i, all) => !a.startsWith('--') && all[i - 1] !== '--page');
   if (!name) throw new Error('usage: node rebuild.js "Section name" [--page "Page"] [--apply]');
-  for await (const pageName of eachPage(page)) {
+  for await (const pageName of ed.eachPage(page)) {
     const model = await readModel(page);
     const block = model.blocks.find(b => b.name.trim().toLowerCase() === name.toLowerCase());
     if (!block) throw new Error(`no section "${name}" on page ${pageName}. Sections: ${model.blocks.map(b => b.name.trim()).join(', ')}`);
@@ -311,7 +322,7 @@ async function main(page) {
   }
 }
 
-module.exports = { plan, rebuild };
+module.exports = { plan, rebuild, useEditor };
 if (require.main === module) {
   if (process.argv.includes('--selftest')) selftest();
   else require('./connect').run(main);
