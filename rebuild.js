@@ -3,7 +3,7 @@
 //   node rebuild.js "Section name" [--page "About"] --apply   rebuild it (undo with: node restore.js)
 //   node rebuild.js --selftest
 // Desktop is never touched. Mobile-only and locked elements are left where they are.
-const { readModel, textSize, blownUp, phoneSize, MOBILE_W, MIN_TEXT, MIN_HERO, DESKTOP_W } = require('./audit');
+const { readModel, textSize, blownUp, phoneSize, turned, MOBILE_W, MIN_TEXT, MIN_HERO, DESKTOP_W } = require('./audit');
 // Editor actions; eval.js swaps in an offline simulator (useEditor) to score layouts without Showit.
 let ed = require('./editor');
 const useEditor = e => { ed = e; };
@@ -61,7 +61,8 @@ function plan(block, ink = {}, top = PAD, o = {}) {
   };
   const host = new Map();
   for (const t of rest.filter(x => x.e.type === 'text')) {
-    const g = rest.find(o => MEDIA.includes(o.e.type) && on(t, o));
+    // Hosts: photos, and coloured boxes (a text panel or card background).
+    const g = rest.find(o => (MEDIA.includes(o.e.type) || o.e.type === 'simple') && on(t, o));
     if (g) host.set(t, g);
   }
   // Reading order: rows (tops within 20px) top to bottom, then left to right.
@@ -108,9 +109,13 @@ function plan(block, ink = {}, top = PAD, o = {}) {
       }
       let w, h, x;
       // Text wider than the whole desktop canvas is a marquee/decoration: keep its mobile size, only move it.
-      const keep = e.type === 'text' && d.w > DESKTOP_W;
+      // A rotated element (vertical label) also keeps its size; it's centred and stacked by its turned box.
+      const tb = turned(e.mobile), turn = tb !== e.mobile;
+      const keep = turn || (e.type === 'text' && d.w > DESKTOP_W);
+      let off = 0;
       if (keep) {
         ({ x, w, h } = e.mobile);
+        if (turn) { x = Math.round(L + (W - w) / 2); off = Math.round((tb.h - e.mobile.h) / 2); h = Math.round(tb.h); }
       } else if (e.type === 'text') {
         w = W; x = L; h = textH(id, e, w);
       } else if (o.byMobile) {
@@ -120,12 +125,14 @@ function plan(block, ink = {}, top = PAD, o = {}) {
         x = Math.round(L + (W - w) / 2);
       } else {
         // Big photos go full width; in a card (group), so does its main photo.
-        const big = MEDIA.includes(e.type) && (d.w >= 400 || (o.groupW && d.w >= 0.6 * o.groupW));
+        // ...and a photo with text laid on it, so the text has room.
+        const hosting = rest.some(t => host.get(t) === g);
+        const big = (MEDIA.includes(e.type) && (d.w >= 400 || (o.groupW && d.w >= 0.6 * o.groupW))) || hosting;
         w = Math.round(big ? W : Math.min(W, MEDIA.includes(e.type) ? Math.max(100, d.w * 0.6) : d.w));
         h = e.type === 'line' ? e.mobile.h : Math.round(d.h * w / d.w); // line h = stroke weight, keep
         x = Math.round(L + (W - w) / 2);
       }
-      const steps = [{ id, type: e.type, keep, target: { x, y, w, h } }];
+      const steps = [{ id, type: e.type, keep, off, target: { x, y, w, h } }];
       const over = rest.filter(t => host.get(t) === g).sort((a, b) => a.e.desktop.y - b.e.desktop.y);
       if (over.length) {
         // Text on a photo: photo width minus padding, stacked and centred on it; the photo grows if needed.
@@ -215,7 +222,11 @@ async function layOut(page, model, units, top, note, name) {
     }
     const [lead, ...over] = u.steps;
     const t = { ...lead.target, y };
-    if (lead.keep) { model = await applyMobile(page, model, lead.id, { y }, note); y += t.h + GAP; continue; }
+    if (lead.keep) {
+      model = await applyMobile(page, model, lead.id, lead.off ? { x: lead.target.x, y: y + lead.off } : { y }, note);
+      y += t.h + GAP;
+      continue;
+    }
     if (lead.type === 'text') [model, t.h] = await placeText(page, model, lead.id, t.x, t.w, note);
     if (over.length) {
       // Measure the text on the photo first, then size the photo and centre the text on it.
@@ -303,6 +314,12 @@ function selftest() {
     ['P.elements.0', { x: 20, y: 86, w: 280, h: 20 }],
   ]);
   assert.strictEqual(q2.mobileOnly, 1);
+  // A vertical label (rotated -90°) keeps its size: centred, stacked by its turned height.
+  const vert = { id: 'V', desktop: { h: 400 }, mobile: { h: 300 }, elements: [
+    { type: 'text', visible: 'a', desktop: { x: 500, y: 100, w: 147, h: 22, a: -90 }, mobile: { x: 250, y: 100, w: 147, h: 22, a: -90 } },
+  ] };
+  const v = plan(vert, {}, 40).steps[0];
+  assert.deepStrictEqual([v.keep, v.off, v.target], [true, 63, { x: 87, y: 40, w: 147, h: 147 }]);
   console.log('selftest ok');
 }
 
