@@ -132,6 +132,8 @@ function audit({ blocks, theme, ink = {} }) {
       const m = e.mobile;
       if (!m) { add(b, e, 'no mobile layout'); continue; }
       const d = e.desktop;
+      // Parked outside the canvas on desktop and off the phone too: hidden on purpose (hover tricks, notes).
+      if (d?.w && (d.x >= DESKTOP_W || d.x + d.w <= 0) && (m.x >= MOBILE_W || m.x + m.w <= 0)) continue;
       // Full-bleed background (covers its section on desktop): on mobile it must cover the section too.
       if (e.type === 'graphic' && d && b.desktop?.h && d.w >= 0.9 * DESKTOP_W && d.h >= 0.9 * b.desktop.h) {
         if (bh > 1 && (m.x > 0.5 || m.y > 0.5 || m.x + m.w < MOBILE_W - 0.5 || m.y + m.h < bh - 0.5))
@@ -152,7 +154,10 @@ function audit({ blocks, theme, ink = {} }) {
       // Shapes, lines, icons and small pictures bleeding off the edge are decoration (templates do it a
       // lot); a photo, button or card that is mostly off the phone (under 80% showing) was knocked out.
       const spillX = Math.max(-left, right - MOBILE_W), shown = Math.max(0, Math.min(MOBILE_W, right) - Math.max(0, left)) / Math.max(1, right - left);
-      const decor = e.type !== 'text' && (!['graphic', 'gallery', 'video', 'button', 'group'].includes(e.type) || tb.w < 80 || shown >= 0.8 || spillX <= 12);
+      // A matching picture bleeding off the other side at the same height: a symmetric frame, design.
+      const mirrored = e.type !== 'text' && els.some(o => o !== e && o.type === e.type && o.mobile && Math.abs(o.mobile.w - m.w) <= 0.1 * m.w &&
+        Math.abs(o.mobile.y - m.y) <= 20 && (left < 0 ? o.mobile.x + o.mobile.w > MOBILE_W : o.mobile.x < 0));
+      const decor = e.type !== 'text' && (mirrored || !['graphic', 'gallery', 'video', 'button', 'group'].includes(e.type) || tb.w < 80 || shown >= 0.8 || spillX <= 12);
       if (!e._child && !decor && (left < -0.5 || right > MOBILE_W + 0.5)) {
         const spill = spillX;
         // Letters that fit on one screen are a real bug however far they spill (a heading pushed off the side).
@@ -180,6 +185,13 @@ function audit({ blocks, theme, ink = {} }) {
       const bottom = k0 ? m.y + k0.dy + k0.h : tb.y + tb.h;
       if (e.type === 'text' && !e._child && !(k0 && k0.w > MOBILE_W) && bh > 1 && bottom > bh + 0.5) add(b, e, `sticks out below section (bottom ${Math.round(bottom)}, section height ${bh})`,
         bottom - bh <= MAX_NUDGE ? { sectionH: Math.ceil(bottom + MIN_GAP) } : null);
+      // A button too small to tap comfortably (templates use 30-44px).
+      if (e.type === 'button' && m.h < 28) add(b, e, `button only ${m.h}px tall, hard to tap`, { h: 40 });
+      // Letters touching the screen edge (on screen, under 4px away): give them a 12px margin.
+      if (k0 && left >= -0.5 && right <= MOBILE_W + 0.5 && (left < 4 || right > MOBILE_W - 4)) {
+        const x = Math.max(m.x, 12), w = Math.min(m.x + m.w, MOBILE_W - 12) - x;
+        if (w >= 100) add(b, e, `text touching the screen edge (${Math.round(Math.min(left, MOBILE_W - right))}px away)`, { x, w });
+      }
       if (e.type === 'text') {
         const s = textSize(e, theme);
         if (s < MIN_TEXT) {

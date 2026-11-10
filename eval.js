@@ -115,6 +115,25 @@ async function simulateFix(model) {
 }
 
 const real = i => !/intentional/.test(i.problem);
+
+// How a laid-out section reads on a phone (pro templates' medians as the bar): text away from the
+// edges, paragraphs big enough, buttons easy to tap, headings not too tall.
+const ux = { margin: [0, 0], body: [0, 0], button: [0, 0], heading: [0, 0] };
+function quality(model, bid) {
+  const b = model.blocks.find(x => x.id === bid);
+  for (const [i, e] of b.elements.entries()) {
+    if (e.visible === 'd' || e.visible === 'n' || !e.mobile?.w || e.mobile.a) continue;
+    const k = model.ink[`${bid}.elements.${i}`];
+    const tick = (key, ok) => { ux[key][1]++; if (ok) ux[key][0]++; };
+    if (e.type === 'button') tick('button', e.mobile.h >= 40);
+    if (e.type !== 'text' || !k || k.w > MOBILE_W) continue;
+    const l = e.mobile.x + k.dx;
+    tick('margin', l >= 12 && l + k.w <= MOBILE_W - 12);
+    const sz = textSize(e, model.theme);
+    if (k.lines >= 3 && sz < 24) tick('body', sz >= 14);
+    if (sz >= 32) tick('heading', k.lines <= 3);
+  }
+}
 const sig = i => `${i.id}|${i.problem.split(/[(,;]/)[0].trim()}`;
 
 // ---- ways layouts break (labelled) --------------------------------------------------------------
@@ -189,7 +208,8 @@ const BREAKS = {
       const stray = fresh.filter(i => i.id.split('.')[0] !== b.id);
       alarms += stray.length;
       if (VERBOSE) for (const i of stray) console.log(`  false alarm (${label}): ${i.block} | ${i.what} | ${i.problem}`);
-      const { model: done } = await simulateFix(m);
+      const { model: done, rebuilt } = await simulateFix(m);
+      if (kind === 'scaled' && rebuilt) quality(done, b.id);
       const left = audit(done).filter(real).filter(i => !leftSigs.has(sig(i)));
       add(`clean after Fix: ${kind}`, f, !left.length, `${label}: ${left.map(i => `${i.what} ${i.problem.split(' (')[0]}`).join('; ')}`);
     }
@@ -214,6 +234,9 @@ const BREAKS = {
     if (VERBOSE) for (const b of s.bad.slice(0, 8)) console.log(`    - ${b}`);
   }
   console.log(`${'false alarms (other sections)'.padEnd(28)} ${alarms}`);
+  const pc = ([ok, n]) => (n ? `${(100 * ok / n).toFixed(0)}% (${ok}/${n})` : '-');
+  console.log(`
+Phone layout after rebuild (never-designed sections): text 12px+ from the edges ${pc(ux.margin)}, paragraphs 14px+ ${pc(ux.body)}, buttons 40px+ tall ${pc(ux.button)}, headings in 3 lines ${pc(ux.heading)}`);
   const dirty = pageLeft.filter(([, n]) => n);
   console.log(`${'untouched pages left unclean'.padEnd(28)} ${dirty.length}/${pageLeft.length}${dirty.length ? '  ' + dirty.map(([p, n]) => `${p} (${n})`).join(', ') : ''}`);
   // npm test: accuracy below these floors fails the build (keeps it from sliding back). Not 100%: some
@@ -221,7 +244,7 @@ const BREAKS = {
   // mean false alarms on real templates.
   const FLOOR = { catch: 0.9, clean: 0.97 };
   const low = Object.entries(score).filter(([k, s]) => s.ok / s.n < (k.startsWith('catch') ? FLOOR.catch : FLOOR.clean));
-  if (process.argv.includes('--strict') && (alarms || dirty.length > 2 || low.length)) {
+  if (process.argv.includes("--strict") && (alarms || dirty.length > 0.05 * pageLeft.length || low.length)) {
     for (const [k, s] of low) console.error(`  below floor: ${k} ${(100 * s.ok / s.n).toFixed(1)}%`);
     console.error('\neval: accuracy dropped (run node eval.js --verbose for details)');
     process.exitCode = 1;

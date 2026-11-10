@@ -164,6 +164,8 @@ function audit({ blocks, theme, ink = {} }) {
       const m = e.mobile;
       if (!m) { add(b, e, 'no mobile layout'); continue; }
       const d = e.desktop;
+      // Parked outside the canvas on desktop and off the phone too: hidden on purpose (hover tricks, notes).
+      if (d?.w && (d.x >= DESKTOP_W || d.x + d.w <= 0) && (m.x >= MOBILE_W || m.x + m.w <= 0)) continue;
       // Full-bleed background (covers its section on desktop): on mobile it must cover the section too.
       if (e.type === 'graphic' && d && b.desktop?.h && d.w >= 0.9 * DESKTOP_W && d.h >= 0.9 * b.desktop.h) {
         if (bh > 1 && (m.x > 0.5 || m.y > 0.5 || m.x + m.w < MOBILE_W - 0.5 || m.y + m.h < bh - 0.5))
@@ -184,7 +186,10 @@ function audit({ blocks, theme, ink = {} }) {
       // Shapes, lines, icons and small pictures bleeding off the edge are decoration (templates do it a
       // lot); a photo, button or card that is mostly off the phone (under 80% showing) was knocked out.
       const spillX = Math.max(-left, right - MOBILE_W), shown = Math.max(0, Math.min(MOBILE_W, right) - Math.max(0, left)) / Math.max(1, right - left);
-      const decor = e.type !== 'text' && (!['graphic', 'gallery', 'video', 'button', 'group'].includes(e.type) || tb.w < 80 || shown >= 0.8 || spillX <= 12);
+      // A matching picture bleeding off the other side at the same height: a symmetric frame, design.
+      const mirrored = e.type !== 'text' && els.some(o => o !== e && o.type === e.type && o.mobile && Math.abs(o.mobile.w - m.w) <= 0.1 * m.w &&
+        Math.abs(o.mobile.y - m.y) <= 20 && (left < 0 ? o.mobile.x + o.mobile.w > MOBILE_W : o.mobile.x < 0));
+      const decor = e.type !== 'text' && (mirrored || !['graphic', 'gallery', 'video', 'button', 'group'].includes(e.type) || tb.w < 80 || shown >= 0.8 || spillX <= 12);
       if (!e._child && !decor && (left < -0.5 || right > MOBILE_W + 0.5)) {
         const spill = spillX;
         // Letters that fit on one screen are a real bug however far they spill (a heading pushed off the side).
@@ -212,6 +217,13 @@ function audit({ blocks, theme, ink = {} }) {
       const bottom = k0 ? m.y + k0.dy + k0.h : tb.y + tb.h;
       if (e.type === 'text' && !e._child && !(k0 && k0.w > MOBILE_W) && bh > 1 && bottom > bh + 0.5) add(b, e, `sticks out below section (bottom ${Math.round(bottom)}, section height ${bh})`,
         bottom - bh <= MAX_NUDGE ? { sectionH: Math.ceil(bottom + MIN_GAP) } : null);
+      // A button too small to tap comfortably (templates use 30-44px).
+      if (e.type === 'button' && m.h < 28) add(b, e, `button only ${m.h}px tall, hard to tap`, { h: 40 });
+      // Letters touching the screen edge (on screen, under 4px away): give them a 12px margin.
+      if (k0 && left >= -0.5 && right <= MOBILE_W + 0.5 && (left < 4 || right > MOBILE_W - 4)) {
+        const x = Math.max(m.x, 12), w = Math.min(m.x + m.w, MOBILE_W - 12) - x;
+        if (w >= 100) add(b, e, `text touching the screen edge (${Math.round(Math.min(left, MOBILE_W - right))}px away)`, { x, w });
+      }
       if (e.type === 'text') {
         const s = textSize(e, theme);
         if (s < MIN_TEXT) {
@@ -354,7 +366,12 @@ function selftest() {
     T('Squeezed quote', { x: 160, y: 120, w: 150, h: 70 }, { desktop: { x: 700, y: 100, w: 400, h: 80 } }),
     { type: 'simple', visible: 'a', mobile: { x: 0, y: 190, w: 320, h: 60 }, desktop: { x: 0, y: 290, w: 400, h: 80 } },
   ] });
+  blocks.push({ id: 'X', name: 'Touch', visible: 'a', mobile: { h: 300 }, desktop: { h: 300 }, elements: [
+    { type: 'button', visible: 'a', mobile: { x: 100, y: 10, w: 120, h: 22 }, desktop: { x: 500, y: 10, w: 160, h: 40 } },  // too small to tap
+    T('Edge', { x: 45, y: 100, w: 275, h: 40 }, { desktop: { x: 300, y: 100, w: 500, h: 40 } }),                           // letters at the right edge
+  ] });
   const ink = {
+    'X.elements.1': { dx: 0, dy: 0, w: 275, h: 40, lines: 2 },
     'H.elements.3': { dx: 0, dy: 0, w: 148, h: 68, lines: 4 },
     'D.elements.0': { dx: 13, dy: -4, w: 293, h: 90, lines: 2 },
     'D.elements.1': { dx: 0, dy: -14, w: 13054, h: 5102, lines: 3 },
@@ -400,6 +417,8 @@ function selftest() {
     'G.elements.0.elements.q text 10px, under 12px {"size":12}',
     'H.elements.3 text squeezed into a 150px column null',
     'H.elements.0 covered by a shape on mobile null',
+    'X.elements.0 button only 22px tall, hard to tap {"h":40}',
+    'X.elements.1 text touching the screen edge {"x":45,"w":263}',
   ]);
   console.log('selftest ok');
 }
