@@ -26,7 +26,18 @@ const BODY = 14;              // smallest paragraph size on a phone
 const HEAD_LINES = 3;         // longest a big heading should wrap
 const BUTTON_H = 44;          // comfortable tap target
 const BUTTON_W = 160;
-const kindOf = u => (u.kind === 'group' ? 'card' : u.kind === 'one' && u.steps[0].type === 'text' && !u.steps[0].keep ? 'text' : 'block');
+// A decoration's place next to the element it decorates: its desktop offset and size, scaled by how much
+// that element shrank. It may bleed a little off the screen (as decorations do), not further.
+function placeDecor(rel, box) {
+  const k = box.w / Math.max(1, rel.lw);
+  const w = Math.max(1, Math.round(rel.w * k)), h = Math.max(1, Math.round(rel.h * k));
+  const x = Math.round(Math.min(Math.max(box.x + rel.dx * k, -0.3 * w), MOBILE_W - 0.7 * w));
+  // Vertically it stays on its element (a corner may peek out), never drifting onto the next thing.
+  const lo = box.y - 0.3 * h, hi = box.y + box.h - 0.7 * h;
+  const y = Math.round(lo <= hi ? Math.min(Math.max(box.y + rel.dy * k, lo), hi) : box.y + (box.h - h) / 2);
+  return { x, y, w, h };
+}
+const kindOf = u => (u.kind === 'group' ? 'card' : u.kind === 'slot' ? 'block' : u.kind === 'one' && u.steps[0].type === 'text' && !u.steps[0].keep ? 'text' : 'block');
 const gapFor = (a, b) => (a === 'text' && b === 'text' ? TEXT_GAP : a === 'card' && b === 'card' ? CARD_GAP : GAP);
 const INSET = 16;             // padding inside a photo for text laid over it
 const ROW_GAP = 8;            // between icons kept side by side
@@ -47,6 +58,14 @@ const textBoxH = k => Math.ceil(k.dy + k.h) + 2;
 function plan(block, ink = {}, top = PAD_TOP, o = {}) {
   const L = o.left ?? M, W = o.width ?? CW;
   const mobileOnly = block.elements.filter(e => e.visible === 'm').length;
+  // A slideshow (canvas states) keeps its slides' content apart from the section's elements, where the
+  // tool doesn't move it. Its area becomes a fixed slot: everything else is laid out above and below it.
+  const slides = (block.states || []).flatMap((st, k) => (st.elements || []).map((e, n) => ({ ...e, _id: `${block.id}.states.${k}.elements.${n}` })))
+    .filter(e => e.mobile?.w && e.visible !== 'd' && e.visible !== 'n');
+  const union = rs => { const x = Math.min(...rs.map(r => r.x || 0)), y = Math.min(...rs.map(r => r.y || 0));
+    return { x, y, w: Math.max(...rs.map(r => (r.x || 0) + r.w)) - x, h: Math.max(...rs.map(r => (r.y || 0) + r.h)) - y }; };
+  const withD = slides.filter(e => e.desktop?.w);
+  const slot = !o.inner && slides.length ? { m: union(slides.map(e => e.mobile)), d: withD.length ? union(withD.map(e => e.desktop)) : {} } : null;
   if (o.byMobile) {
     // Read the phone layout as if it were the desktop one (scaled up), mobile-only elements included.
     const S = DESKTOP_W / MOBILE_W;
@@ -78,10 +97,39 @@ function plan(block, ink = {}, top = PAD_TOP, o = {}) {
     if (g) host.set(t, g);
   }
   // Reading order: rows (tops within 20px) top to bottom, then left to right.
+  if (slot) {
+    const S = DESKTOP_W / MOBILE_W, sd = o.byMobile || !slot.d.w ? { x: slot.m.x * S, y: slot.m.y * S, w: slot.m.w * S, h: slot.m.h * S } : slot.d;
+    rest.push({ id: `${block.id}.states`, e: { type: 'slot', visible: 'a', desktop: sd, mobile: slot.m } });
+  }
   const flow = rest.filter(x => !host.has(x)).sort((a, b) =>
     Math.abs(a.e.desktop.y - b.e.desktop.y) < 20 ? a.e.desktop.x - b.e.desktop.x : a.e.desktop.y - b.e.desktop.y);
+  // Decorations aren't content: a colour block (shape) that holds no text, or a small accent laid on a
+  // bigger element (a leaf on a photo, a sticker on a card). They travel with the element they decorate
+  // instead of taking a slot of their own in the column. Anchor: what they overlap most, else the nearest.
+  const area = r => Math.max(1, r.w * r.h);
+  const over2 = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  const hostsText = x => [...host.values()].includes(x);
+  const deco = new Map();
+  // (Not on a hand-made phone layout: its designer already placed them.)
+  if (!o.inner && !o.byMobile) {
+    const isDecor = x => {
+      const t = x.e.type, d = x.e.desktop;
+      // (Icons mean something: menu, close, social. Never decoration.)
+      if (t === 'text' || t === 'line' || t === 'group' || t === 'icon' || o.notDecor?.has(x.id) || hostsText(x) || turned(x.e.mobile) !== x.e.mobile) return false;
+      if (t === 'simple') return true;
+      return flow.some(a => a !== x && a.e.type !== 'line' && area(a.e.desktop) >= 2 * area(d) && over2(d, a.e.desktop) >= 0.3 * area(d));
+    };
+    const decor = flow.filter(isDecor), content = flow.filter(x => !decor.includes(x));
+    const mid = r => [r.x + r.w / 2, r.y + r.h / 2];
+    for (const x of content.length ? decor : []) {
+      const d = x.e.desktop, [cx, cy] = mid(d);
+      const best = content.map(a => [a, over2(d, a.e.desktop), Math.hypot(cx - mid(a.e.desktop)[0], cy - mid(a.e.desktop)[1])])
+        .sort((p, q) => q[1] - p[1] || p[2] - q[2])[0];
+      deco.set(x, best[0]);
+    }
+  }
   const rows = [];
-  for (const x of flow) {
+  for (const x of flow.filter(x => !deco.has(x))) {
     const r = rows[rows.length - 1];
     if (r && Math.abs(r[0].e.desktop.y - x.e.desktop.y) < 20) r.push(x); else rows.push([x]);
   }
@@ -103,10 +151,29 @@ function plan(block, ink = {}, top = PAD_TOP, o = {}) {
   }
   const textH = (id, e, w) => { const k = ink[id]; return k ? textBoxH({ dy: k.dy, h: k.h * Math.max(1, k.w / w) }) : e.mobile.h; };
 
+  // Icons sharing a line with text on desktop (social icons beside a copyright line) still form their own
+  // row on the phone, instead of each taking a line.
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i], icons = r.filter(small);
+    if (icons.length < 2 || icons.length === r.length) continue;
+    const rest = r.filter(x => !small(x));
+    const iconsFirst = icons[0].e.desktop.x < rest[0].e.desktop.x;
+    rows.splice(i, 1, ...(iconsFirst ? [icons, ...rest.map(x => [x])] : [...rest.map(x => [x]), icons]));
+    i += rest.length;
+  }
   let y = top, end = null, prevK = null;
   const at = (k, col) => { y = end === null ? top : end + (col ? CARD_GAP : gapFor(prevK, k)); prevK = k; }; // next unit's top
   const units = [];
   for (const r of rows) {
+    if (r.length === 2 && r.every(x => MEDIA.includes(x.e.type) && !small(x) && !hostsText(x) && x.e.desktop.w < 600)) {
+      // Two photos side by side on desktop: a 2-up row on the phone (each half the column).
+      at('block');
+      const w = Math.floor((W - 12) / 2), hs = r.map(({ e }) => Math.round(e.desktop.h * w / e.desktop.w));
+      const h = Math.max(...hs);
+      units.push({ kind: 'row', y, h, steps: r.map(({ e, id }, i) => ({ id, type: e.type, target: { x: L + i * (w + 12), y, w, h: hs[i] } })) });
+      end = y + h;
+      continue;
+    }
     if (r.length > 1 && r.every(small)) {
       at('block');
       // Keep the row: each item at its mobile size (or half its desktop size), shrunk together if too wide.
@@ -127,6 +194,14 @@ function plan(block, ink = {}, top = PAD_TOP, o = {}) {
     }
     for (const g of r) {
       const { e, id } = g, d = e.desktop;
+      if (e.type === 'slot') {
+        // The slideshow moves as one piece: every slide's elements shift by the same amount.
+        at('block');
+        const dy = y - e.mobile.y;
+        units.push({ kind: 'slot', id, x: e.mobile.x, w: e.mobile.w, y, h: e.mobile.h, from: e.mobile.y, steps: slides.map(s => ({ id: s._id, type: s.type, target: { ...s.mobile, y: s.mobile.y + dy } })) });
+        end = y + e.mobile.h;
+        continue;
+      }
       if (e.type === 'group' && e.elements) {
         at('card');
         const kids = (e.elementOrder || Object.keys(e.elements)).filter(c => e.elements[c])
@@ -182,11 +257,30 @@ function plan(block, ink = {}, top = PAD_TOP, o = {}) {
       end = y + h;
     }
   }
+  // Each decoration goes with the unit holding its anchor, placed relative to that unit's lead element.
+  const byId = new Map(items.concat(rest).map(it => [it.id, it]));
+  const loose = [];
+  for (const [x, a] of deco) {
+    const u = units.find(q => q.id === a.id || q.steps.some(st => st.id === a.id));
+    const leadId = u && (u.kind === 'group' || u.kind === 'slot' ? u.id : u.steps[0].id), ld = leadId && byId.get(leadId)?.e.desktop;
+    if (!ld) { loose.push(x.id); continue; }
+    const d = x.e.desktop, rel = { dx: d.x - ld.x, dy: d.y - ld.y, w: d.w, h: d.h, lw: ld.w };
+    const box = u.kind === 'group' ? u.steps[u.steps.length - 1].target : u.kind === 'slot' ? { x: u.x, y: u.y, w: u.w, h: u.h } : u.steps[0].target;
+    (u.decor ??= []).push({ id: x.id, type: x.e.type, rel, target: placeDecor(rel, box) });
+  }
+  // A decoration with nothing to go with takes its own slot rather than staying where it was.
+  if (loose.length) return plan(block, ink, top, { ...o, notDecor: new Set([...(o.notDecor || []), ...loose]) });
+  // A decoration drawn above a text that it would land on hides it: better it takes its own slot.
+  const zOf = id => +id.split('.')[2];
+  const texts = units.flatMap(u => u.steps.filter(st => st.type === 'text'));
+  const hiding = units.flatMap(u => u.decor || []).filter(dc => texts.some(t => zOf(dc.id) > zOf(t.id) &&
+    over2(dc.target, t.target) > 0.05 * Math.min(area(dc.target), area(t.target))));
+  if (hiding.length) return plan(block, ink, top, { ...o, notDecor: new Set([...(o.notDecor || []), ...hiding.map(dc => dc.id)]) });
   // Only a background (a photo hero): nothing to stack, so keep the section's height instead of collapsing it.
   const sectionH = units.length ? Math.max(end + PAD_BOT, 100)
     : Math.max(block.mobile?.h || 0, Math.round(dh * MOBILE_W / DESKTOP_W), block.desktop.nature === 'wH' ? MIN_HERO : 0);
   return {
-    units, steps: units.flatMap(u => u.steps), sectionH, innerH: units.length ? end - top : 0,
+    units, steps: units.flatMap(u => [...u.steps, ...(u.decor || []).map(dc => ({ id: dc.id, type: dc.type, decor: true, target: dc.target }))]), sectionH, innerH: units.length ? end - top : 0,
     bg: bg.map(({ id }) => ({ id, target: { x: 0, y: 0, w: MOBILE_W, h: sectionH } })),
     mobileOnly,
   };
@@ -246,11 +340,18 @@ async function rebuild(page, model, block, apply) {
 // Places units top to bottom from `top` (live: text heights are measured as we go). Returns [model, bottom].
 async function layOut(page, model, units, top, note, name) {
   let y = top, end = null, prevK = null, n = 0;
+  const decorate = async (u, box) => { for (const dc of u.decor || []) model = await applyMobile(page, model, dc.id, placeDecor(dc.rel, box), note); };
   for (const u of units) {
     if (name) await say(page, `Laying out ${name}: ${++n}/${units.length}`);
     const k = kindOf(u);
     y = end === null ? top : end + (u.colStart ? CARD_GAP : gapFor(prevK, k));
     prevK = k;
+    if (u.kind === 'slot') {
+      for (const s of u.steps) model = await applyMobile(page, model, s.id, { y: s.target.y - u.y + y }, note);
+      end = y + u.h;
+      await decorate(u, { x: u.x, y, w: u.w, h: u.h });
+      continue;
+    }
     if (u.kind === 'group') {
       // Move the group into place first (on screen, so it can be opened), lay out its insides in its
       // own coordinates, then put it back in place (its box can shift as its insides change).
@@ -260,11 +361,13 @@ async function layOut(page, model, units, top, note, name) {
       [model, bottom] = await layOut(page, model, u.inner, 0, note);
       model = await applyMobile(page, model, u.id, { x: g.x, y }, note);
       end = y + Math.max(bottom, 1);
+      await decorate(u, { x: g.x, y, w: g.w, h: Math.max(bottom, 1) });
       continue;
     }
     if (u.kind === 'row') {
       for (const s of u.steps) model = await applyMobile(page, model, s.id, { ...s.target, y: y + s.target.y - u.y }, note);
       end = y + u.h;
+      await decorate(u, { ...u.steps[0].target, y: y + u.steps[0].target.y - u.y });
       continue;
     }
     const [lead, ...over] = u.steps;
@@ -272,6 +375,7 @@ async function layOut(page, model, units, top, note, name) {
     if (lead.keep) {
       model = await applyMobile(page, model, lead.id, lead.off ? { x: lead.target.x, y: y + lead.off } : { y }, note);
       end = y + t.h;
+      await decorate(u, t);
       continue;
     }
     if (lead.type === 'text') [model, t.h] = await placeText(page, model, lead.id, t.x, t.w, note);
@@ -291,6 +395,7 @@ async function layOut(page, model, units, top, note, name) {
       model = await applyMobile(page, model, lead.id, t, note);
     }
     end = y + t.h;
+    await decorate(u, t);
   }
   return [model, end ?? top];
 }
@@ -387,6 +492,38 @@ function selftest() {
   assert.deepStrictEqual(gp.steps.map(s => s.id.split('.').pop()), ['0', '1', '2', '3', '4', '5']); // photo, caption, photo, caption...
   assert.deepStrictEqual(gp.units.map(u => u.colStart), [false, false, true, false, true, false]);
   assert.strictEqual(gp.steps[2].target.y - (gp.steps[1].target.y + gp.steps[1].target.h), 32); // a card's worth of space
+  // A leaf laid on a photo's corner goes with the photo; a colour block doesn't take a slot; two photos
+  // side by side stay a 2-up row.
+  const dec = { id: 'D', desktop: { h: 900 }, mobile: { h: 600 }, elements: [
+    { type: 'graphic', visible: 'a', desktop: { x: 100, y: 100, w: 500, h: 500 }, mobile: {} },   // photo
+    { type: 'graphic', visible: 'a', desktop: { x: 520, y: 60, w: 120, h: 120 }, mobile: {} },    // leaf on its corner
+    { type: 'simple', visible: 'a', desktop: { x: 700, y: 650, w: 300, h: 40 }, mobile: {} },     // colour block
+    { type: 'text', visible: 'a', desktop: { x: 700, y: 620, w: 400, h: 60 }, mobile: { h: 30 } },
+    { type: 'graphic', visible: 'a', desktop: { x: 100, y: 760, w: 300, h: 200 }, mobile: {} },
+    { type: 'graphic', visible: 'a', desktop: { x: 450, y: 760, w: 300, h: 200 }, mobile: {} },
+  ] };
+  const dp = plan(dec);
+  assert.deepStrictEqual(dp.units.map(u => u.kind), ['one', 'one', 'row']);         // photo, text, 2-up
+  assert.deepStrictEqual(dp.units[0].decor.map(dc => dc.id), ['D.elements.1']);      // leaf with the photo
+  assert.deepStrictEqual(dp.units[0].decor[0].target, { x: 252, y: 29, w: 65, h: 65 }); // its top-right corner, scaled (×0.544), peeking out at most 30%
+  assert.deepStrictEqual(dp.units[1].decor.map(dc => dc.id), ['D.elements.2']);      // block with the text
+  assert.deepStrictEqual(dp.units[2].steps.map(st => st.target.w), [130, 130]);
+  // A slideshow moves as one piece into its place in the reading order: title, slides, button.
+  const ss = { id: 'Z', desktop: { h: 800 }, mobile: { h: 600 }, states: [{ elements: [
+    { type: 'text', visible: 'a', desktop: { x: 300, y: 200, w: 600, h: 200 }, mobile: { x: 20, y: 150, w: 280, h: 200 } },
+  ] }], elements: [
+    { type: 'text', visible: 'a', desktop: { x: 300, y: 80, w: 600, h: 60 }, mobile: { h: 30 } },
+    { type: 'button', visible: 'a', desktop: { x: 500, y: 450, w: 200, h: 50 }, mobile: { w: 160, h: 44 } },
+  ] };
+  const sp = plan(ss);
+  assert.deepStrictEqual(sp.units.map(u => [u.kind, u.y]), [['one', 48], ['slot', 102], ['one', 326]]);
+  assert.deepStrictEqual(sp.units[1].steps.map(st => [st.id, st.target.y]), [['Z.states.0.elements.0', 102]]); // slide moved up from 150
+  // Social icons on the same line as the copyright text stay a row of icons.
+  const foot = { id: 'F', desktop: { h: 400 }, mobile: { h: 300 }, elements: [
+    { type: 'text', visible: 'a', desktop: { x: 300, y: 300, w: 500, h: 30 }, mobile: { h: 20 } },
+    ...[0, 1, 2].map(i => ({ type: 'icon', visible: 'a', desktop: { x: 1000 + i * 40, y: 300, w: 30, h: 30 }, mobile: { w: 20, h: 20 } })),
+  ] };
+  assert.deepStrictEqual(plan(foot).units.map(u => [u.kind, u.steps.length]), [['one', 1], ['row', 3]]);
   console.log('selftest ok');
 }
 

@@ -38,7 +38,10 @@ async function main(page) {
   await toPage(page);
   let model = await readModel(page), skipped = 0;
   for (const e of todo) {
-    if (model.page.name !== e.page) { await openPage(page, e.page); model = await readModel(page); }
+    // A shared section (header, footer) is logged under its own name and is on every page: if it's on
+    // the page open, undo it right here.
+    const blockId = e.id.split('.')[0];
+    if (model.page.name !== e.page && !model.blocks.some(b => b.id === blockId && b.canvasSet)) { await openPage(page, e.page); model = await readModel(page); }
     const isSection = !e.id.includes('.');
     const now = isSection ? model.blocks.find(b => b.id === e.id) : findEl(model, e.id);
     // Only undo values that are still what this run left behind.

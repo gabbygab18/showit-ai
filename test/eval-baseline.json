@@ -1,0 +1,29 @@
+{
+ "rates": {
+  "catch: offscreen": 0.9876,
+  "clean after Fix: offscreen": 0.9963,
+  "catch: tiny": 0.9944,
+  "clean after Fix: tiny": 0.9986,
+  "catch: blowup": 0.9927,
+  "clean after Fix: blowup": 1,
+  "catch: squeeze": 0.9481,
+  "clean after Fix: squeeze": 0.9862,
+  "catch: overlap": 0.958,
+  "clean after Fix: overlap": 0.985,
+  "catch: covered": 0.9767,
+  "clean after Fix: covered": 0.9767,
+  "catch: scaled": 0.9481,
+  "clean after Fix: scaled": 0.9935,
+  "catch: never designed (synth)": 1,
+  "clean after Fix: never designed (synth)": 1
+ },
+ "alarms": 0,
+ "dirty": 3,
+ "ux": {
+  "margin": 0.998,
+  "body": 0.9899,
+  "button": 0.9773,
+  "heading": 0.9792,
+  "shapes": 0.7355
+ }
+}

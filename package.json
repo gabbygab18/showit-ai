@@ -1,6 +1,6 @@
 {
   "name": "showit-ai",
-  "version": "1.5.1",
+  "version": "1.6.1",
   "private": true,
   "description": "Showit AI: checks and fixes the mobile layout of Showit sites by driving the Showit editor.",
   "author": "Gabriel Andrei Villanueva",
@@ -40,7 +40,8 @@
     "asarUnpack": [
       "*.js",
       "avatar.svg",
-      "node_modules/playwright-core/**"
+      "node_modules/playwright-core/**",
+      "package.json"
     ],
     "win": {
       "target": "nsis",

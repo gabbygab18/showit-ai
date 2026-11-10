@@ -27,11 +27,26 @@ async function connect() {
   return { browser, page };
 }
 
+// Health check: the editor parts the tool relies on. If Showit redesigns its editor, say so up front
+// instead of failing half-way through a run.
+const PARTS = {
+  'phone preview': '[data-intercom-target="mobile stage"]',
+  'Site tab': '[data-intercom-target="site panel tab"]',
+  'Page tab': '[data-intercom-target="page panel tab"]',
+};
+async function checkEditor(page) {
+  const missing = await page.evaluate(parts => Object.entries(parts).filter(([, sel]) => !document.querySelector(sel)).map(([n]) => n), PARTS);
+  if (missing.length) throw new Error(`Showit's editor looks different from what Showit AI knows (can't find: ${missing.join(', ')}). ` +
+    'If a page is open in the editor, Showit has probably changed it: update Showit AI.');
+  if (!(await page.evaluate(() => !!document.getElementById('mobile_stage_canvas')))) throw new Error('Open a page in the Showit editor first.');
+}
+
 // Run a command against the editor; always disconnects (Chrome stays open), never dumps stack traces.
 async function run(main) {
   let conn;
   try {
     conn = await connect();
+    await checkEditor(conn.page);
     await main(conn.page);
   } catch (e) {
     const msg = e.name === 'TimeoutError'

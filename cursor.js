@@ -8,7 +8,7 @@ const path = require('path');
 const LABEL = 'Showit AI'; // shown only when there's no avatar.svg
 const ACCENT = '#0a84ff';  // macOS blue, used for the click ripple
 const HUE = 221;           // shifts the orange avatar to the app's periwinkle (0 = original colors)
-const VERSION = '6';       // bump when the look changes so open pages swap the old overlay
+const VERSION = '7';       // bump when the look changes so open pages swap the old overlay
 
 // A custom avatar in the data folder wins over the bundled one.
 const avatarFile = [process.env.SHOWIT_AI_DATA, __dirname].filter(Boolean)
@@ -27,7 +27,7 @@ async function install(page) {
     css.id = 'ai-cursor-css';
     css.textContent = `
       #ai-cursor{position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;
-        transform:translate(50vw,50vh);transition:transform .6s cubic-bezier(.22,.8,.3,1)}
+        transform:translate(50vw,50vh);transition:transform .35s cubic-bezier(.22,.8,.3,1)}
       #ai-cursor .arrow{position:absolute;left:-3px;top:-2px;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.45))}
       #ai-cursor .tag{position:absolute;left:18px;top:20px;background:rgba(30,30,30,.85);color:#fff;
         font:600 12px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;padding:5px 9px;border-radius:999px;white-space:nowrap}
@@ -41,7 +41,7 @@ async function install(page) {
 
       /* The buddy is its own layer with a slower glide, so it trails the pointer and catches up. */
       #ai-buddy{position:fixed;left:13px;top:17px;z-index:2147483647;pointer-events:none;width:22px;height:22px;
-        transform:translate(50vw,50vh);transition:transform .95s cubic-bezier(.3,.7,.25,1);
+        transform:translate(50vw,50vh);transition:transform .6s cubic-bezier(.3,.7,.25,1);
         filter:hue-rotate(${HUE}deg) drop-shadow(0 2px 3px rgba(0,0,0,.3))}
       #ai-buddy .body{width:100%;height:100%;transform-origin:50% 90%;rotate:var(--tilt,0deg);
         transition:rotate .35s ease-out;animation:ai-breathe 2.4s ease-in-out infinite}
@@ -92,7 +92,7 @@ async function moveTo(page, target) {
     if (!b) throw new Error('Target not visible');
     x = b.x + b.width / 2; y = b.y + b.height / 2;
   }
-  await page.evaluate(([x, y]) => {
+  const dist = await page.evaluate(([x, y]) => {
     const c = document.getElementById('ai-cursor');
     const from = new DOMMatrix(getComputedStyle(c).transform);
     const dx = x - from.m41;
@@ -111,11 +111,13 @@ async function moveTo(page, target) {
       bud.style.setProperty('--tilt', '0deg');
       bud.style.setProperty('--look', '0px');
     }, 900);
+    return Math.hypot(dx, y - from.m42);
   }, [x, y]);
   // Optional trace of where the cursor goes (used to make demo videos follow the action).
   if (process.env.SHOWIT_AI_TRACE) fs.appendFileSync(process.env.SHOWIT_AI_TRACE, JSON.stringify({ t: Date.now(), x, y }) + '\n');
-  await page.mouse.move(x, y, { steps: 15 });
-  await page.waitForTimeout(650); // let the glide finish before acting
+  // Glide time by distance: a hop to a nearby field is quick, across the screen a bit longer.
+  await page.mouse.move(x, y, { steps: 8 });
+  await page.waitForTimeout(Math.min(350, 120 + (dist || 0) / 3));
   return { x, y };
 }
 

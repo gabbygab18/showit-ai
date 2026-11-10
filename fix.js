@@ -5,7 +5,7 @@
 // Shared sections (Header/Footer) are done last on a page; a change there applies to every page.
 const { audit, readModel, textSize } = require('./audit');
 const { rebuild } = require('./rebuild');
-const { FIELD, RUN, eachPage, toPage, select, findEl, applyMobile, setSectionHeight, say, log, readLog } = require('./editor');
+const { FIELD, RUN, eachPage, toPage, select, findEl, applyMobile, setSectionHeight, say, log, skips, pruneLog } = require('./editor');
 
 const key = i => i.id + JSON.stringify(i.fix);
 // Plain-language reason for a failed edit (the raw error is logged too, for debugging).
@@ -26,10 +26,11 @@ const problems = (model, blockId) => audit(model).filter(x => !x.fix && x.id.spl
 
 async function main(page) {
   const apply = process.argv.includes('--apply');
+  if (apply) pruneLog();
   let done = 0, failed = 0, rebuilt = 0;
   for await (const name of eachPage(page)) {
     // Fixes that made things worse (this run or an earlier one) aren't retried.
-    const reverted = new Set(readLog().filter(e => e.skip).map(e => e.skip));
+    const reverted = new Set(skips().keys()); // this version's only: a newer app retries old failures
     const passes = async () => {
       // Several passes: a fix can reveal the next (widen first, then grow height if still wrapping).
       for (let pass = 1; pass <= (apply ? 6 : 1); pass++) {
@@ -42,6 +43,9 @@ async function main(page) {
         console.log(`\n${name}, pass ${pass}: ${issues.length} fix(es) ${apply ? 'to apply' : 'planned (tour only; add --apply to edit)'}`);
         for (const i of issues) {
           const { also = [], ...main } = i.fix;
+          // A fix that changes nothing (it's already that way) won't help: leave it to the rebuild.
+          const cur = !main.sectionH && findEl(model, i.id);
+          if (cur && Object.entries(main).every(([k, v]) => Math.round(v) === (k === 'size' ? textSize(cur, model.theme) : cur.mobile?.[k]))) { reverted.add(key(i)); continue; }
           const plan = Object.entries(main).map(([k, v]) => `${FIELD[k]?.[1] ?? 'section height'} ${v}`).join(', ')
             + (also.length ? ` (+${also.length} aligned element(s) moved with it)` : '');
           console.log(`- ${i.block}${i.shared ? ' (shared, all pages)' : ''}: ${i.what}: ${i.problem} -> ${plan}`);

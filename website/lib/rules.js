@@ -12,7 +12,8 @@ function measureInk() {
   const out = {};
   for (const el of document.querySelectorAll('[id^="si_element_"]')) {
     // Top-level element (block_elements_3) or a child inside a group (block_elements_3_elements_<child id>).
-    const m = el.id.match(/^si_element_(.+?)_elements_(\d+)(?:_elements_(.+))?$/);
+    // (or on a slideshow slide: block_states_1_elements_2)
+    const m = el.id.match(/^si_element_(.+?)(?:_states_(\d+))?_elements_(\d+)(?:_elements_(.+))?$/);
     if (!m || !el.innerText.trim() || !el.offsetWidth) continue;
     const box = el.getBoundingClientRect();
     const s = box.width / el.offsetWidth; // preview is CSS-scaled by the editor zoom
@@ -21,7 +22,7 @@ function measureInk() {
     r.selectNodeContents(el);
     const c = r.getBoundingClientRect();
     const lines = new Set([...r.getClientRects()].filter(q => q.height).map(q => Math.round(q.top / s / 4))).size;
-    out[`${m[1]}.elements.${m[2]}${m[3] ? `.elements.${m[3]}` : ''}`] = { dx: (c.x - box.x) / s, dy: (c.y - box.y) / s, w: c.width / s, h: c.height / s, lines };
+    out[`${m[1]}${m[2] != null ? `.states.${m[2]}` : ''}.elements.${m[3]}${m[4] ? `.elements.${m[4]}` : ''}`] = { dx: (c.x - box.x) / s, dy: (c.y - box.y) / s, w: c.width / s, h: c.height / s, lines };
   }
   return out;
 }
@@ -85,7 +86,15 @@ function audit({ blocks, theme, ink = {} }) {
       return { ...k, _id: kid, _z: i + (j + 1) / 1000, _child: true, lockEditing: k.lockEditing || e.lockEditing, mobile: at(k.mobile, g), desktop: at(k.desktop, gd) };
     });
     return [{ ...e, _id: id, _z: i }, ...kids];
-  });
+  }).concat((b.states || []).flatMap((st, k) => (st.elements || []).map((e, n) => ({
+    // Slideshow slides: their elements, tagged with their slide (slides overlap each other by design).
+    ...e, _id: `${b.id}.states.${k}.elements.${n}`, _z: 1000 + n, _state: k,
+  }))));
+  // Two elements on different slides never show together.
+  const together = (a, c) => a._state == null || c._state == null || a._state === c._state;
+  // Only the slide open in the editor gets its letters measured; the others' boxes are too rough to
+  // judge collisions by.
+  const judged = e => e._state == null || e.type !== 'text' || !!ink[e._id];
   const rel = (id, f) => {
     const o = offs.get(id);
     if (!o || !f) return f;
@@ -164,10 +173,15 @@ function audit({ blocks, theme, ink = {} }) {
         // Anything sitting inside the canvas on desktop but off it on mobile was knocked out of place.
         const inOnDesktop = d && d.x >= -2 && d.x + d.w <= DESKTOP_W + 2;
         // A group can only be moved (Showit locks its size): wider than the screen means its insides need laying out.
-        const nudge = !(e.type === 'group' && m.w > MOBILE_W) && (inOnDesktop || e.type === 'text' && (spill <= MAX_NUDGE || right - left <= MOBILE_W));
+        // (Text that runs off the canvas on desktop too, like a sliding row of titles, does it on purpose.)
+        const offDesk = d?.w && (d.x < -2 || d.x + d.w > DESKTOP_W + 2);
+        const nudge = !(e.type === 'group' && m.w > MOBILE_W) && (inOnDesktop || e.type === 'text' && (spill <= MAX_NUDGE || (!offDesk && right - left <= MOBILE_W)));
         // Slide back on screen keeping the width (no new wrapping); shrink only if wider than the screen.
         // (A rotated element is slid by where its turned box lands.)
+        // (Text whose box is on screen but whose letters run past it is slid by where the letters are.)
+        const inkShift = k0 && right - left <= MOBILE_W ? Math.min(Math.max(0, left), MOBILE_W - (right - left)) - left : null;
         const fix = turn ? { x: m.x + Math.min(Math.max(0, tb.x), MOBILE_W - tb.w) - tb.x }
+          : inkShift != null && m.x >= 0 && m.x + m.w <= MOBILE_W ? { x: Math.round(m.x + inkShift) }
           : m.w <= MOBILE_W ? { x: Math.min(Math.max(0, m.x), MOBILE_W - m.w) }
           : { x: Math.max(0, m.x), w: Math.min(m.x + m.w, MOBILE_W) - Math.max(0, m.x) };
         // Text lined up in a column with others: slide the whole column so it stays aligned.
@@ -211,20 +225,21 @@ function audit({ blocks, theme, ink = {} }) {
         // A paragraph squeezed into a narrow column: a desktop multi-column layout shrunk onto the phone.
         // The section needs laying out again (fix.js rebuilds it).
         // Side-by-side columns that are all filled (three stats in a row) are a phone design: skip those.
-        const beside = k && els.some(o => o !== e && o.mobile && !o._child === !e._child && turned(o.mobile).w < 0.9 * MOBILE_W && !overlap({ ...m, y: -1e6, h: 2e6 }, turned(o.mobile)) &&
+        const beside = k && els.some(o => o !== e && o.mobile && together(o, e) && !o._child === !e._child && turned(o.mobile).w < 0.9 * MOBILE_W && !overlap({ ...m, y: -1e6, h: 2e6 }, turned(o.mobile)) &&
           Math.min(turned(o.mobile).y + turned(o.mobile).h, m.y + k.dy + k.h) - Math.max(turned(o.mobile).y, m.y + k.dy) > 0.5 * k.h);
         if (k && !e.wp && k.lines >= 3 && m.w < 0.55 * MOBILE_W && !beside)
           add(b, e, `text squeezed into a ${Math.round(m.w)}px column (${k.lines} lines), the section needs a phone layout`);
       }
     }
     // WordPress dynamic text (e.wp) is placeholder in the editor; its real size varies, so skip layout checks.
-    const texts = els.filter(e => e.type === 'text' && e.mobile && !e.wp);
+    // (A text that is only symbols, a big "&" or an arrow, is a glyph used as decoration, not reading text.)
+    const texts = els.filter(e => e.type === 'text' && e.mobile && !e.wp && /[\p{L}\p{N}]/u.test(plain(e.content?.text)));
     // Text covered by a shape, photo or button on mobile that it isn't touching on desktop: a layout
     // that was never done for phones (e.g. a box added on desktop lands on top of the text on mobile).
     // Only what is drawn ABOVE the text hides it; a box under the text is its background panel.
     const solids = els.filter(e => !['text', 'line', 'group'].includes(e.type) && e.mobile && e.desktop?.w);
     for (const t of texts.filter(t => t.desktop?.w))
-      for (const o of solids.filter(o => o._z > t._z)) {
+      for (const o of solids.filter(o => o._z > t._z && together(o, t) && judged(t))) {
         // Text laid on a photo on desktop (its middle on a bigger picture) stays on it on mobile: design.
         const d = turned(t.desktop), od = turned(o.desktop), cx = d.x + d.w / 2, cy = d.y + d.h / 2;
         const onPhoto = cx > od.x && cx < od.x + od.w && cy > od.y && cy < od.y + od.h && od.w * od.h > 1.5 * d.w * d.h;
@@ -240,6 +255,7 @@ function audit({ blocks, theme, ink = {} }) {
     const push = new Map(); // lower element -> [px needed, gap]; one fix each, for the tightest gap
     for (let i = 0; i < texts.length; i++)
       for (let j = i + 1; j < texts.length; j++) {
+        if (!together(texts[i], texts[j]) || !judged(texts[i]) || !judged(texts[j])) continue;
         const a = inkRect(b, texts[i]), c = inkRect(b, texts[j]);
         if (overlap(a, c) && overlapShare(a, c) >= 0.3) {
           // Text layered on text on desktop too (a word over a big decorative title) is the design.

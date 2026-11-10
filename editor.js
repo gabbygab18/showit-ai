@@ -21,15 +21,30 @@ const FIELD = {
 };
 
 const domId = id => id.replace(/\./g, '_');
-// id: "block.elements.3", or "block.elements.3.elements.<child id>" for an element inside a group.
+// id: "block.elements.3", "block.elements.3.elements.<child id>" (inside a group), or
+// "block.states.1.elements.2" (on slide 2 of a slideshow).
 const findEl = (model, id) => {
-  const [b, , i, , c] = id.split('.');
-  const el = model.blocks.find(x => x.id === b)?.elements[+i];
-  return c ? el?.elements?.[c] : el;
+  const p = id.split('.'), blk = model.blocks.find(x => x.id === p[0]);
+  if (p[1] === 'states') return blk?.states?.[+p[2]]?.elements?.[+p[4]];
+  const el = blk?.elements?.[+p[2]];
+  return p[4] != null ? el?.elements?.[p[4]] : el;
 };
-const log = entry => fs.appendFileSync(LOG, JSON.stringify({ at: new Date().toISOString(), run: RUN, ...entry }) + '\n');
+const VERSION = require('./package.json').version;
+const log = entry => fs.appendFileSync(LOG, JSON.stringify({ at: new Date().toISOString(), run: RUN, v: VERSION, ...entry }) + '\n');
 const readLog = () => fs.existsSync(LOG)
-  ? fs.readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
+  ? fs.readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) : [];
+// Fixes that failed or made things worse, to skip: only from this version of the app (a newer one may
+// handle them), with the reason. Map: issue key -> reason.
+const skips = () => new Map(readLog().filter(e => e.skip && e.v === VERSION)
+  .map(e => [e.skip, (e.note || '').replace(/^skip next time:? ?/, '') || 'it made the layout worse']));
+// Keep the log from growing forever: the newest 150 runs (History shows these; older can't be undone).
+function pruneLog(keep = 150) {
+  const all = readLog();
+  const runs = [...new Set(all.map(e => e.run))];
+  if (runs.length <= keep) return;
+  const kept = new Set(runs.slice(-keep));
+  fs.writeFileSync(LOG, all.filter(e => kept.has(e.run)).map(e => JSON.stringify(e)).join('\n') + '\n');
+}
 
 // ---- pages -------------------------------------------------------------------------------
 
@@ -79,10 +94,26 @@ async function listPages(page) {
 }
 
 async function openPage(page, name) {
+  // Leave a shared-section ("Main Site") view first: the page list isn't there while it's open.
+  await page.keyboard.press('Escape');
+  await toPage(page);
   await page.locator('[data-intercom-target="site panel tab"]').click();
   await page.waitForTimeout(500);
-  // Pages only (shared sections can have the same name, e.g. "Contact").
-  const found = await page.evaluate(liveComponents, { ...PAGE_ROW, text: name, attr: 'data-ai-page' });
+  // Pages only (shared sections can have the same name, e.g. "Contact"). The list only draws the rows
+  // in view, so start from the top and scroll down until the page's row shows up.
+  const scroll = top => page.evaluate(top => {
+    const box = document.querySelector('[data-intercom-target="Pages Panel"]');
+    const list = box && [...box.querySelectorAll('*')].filter(n => n.scrollHeight > n.clientHeight + 5).sort((p, q) => q.clientHeight - p.clientHeight)[0];
+    if (list) list.scrollTop = top ? 0 : list.scrollTop + list.clientHeight * 0.8;
+  }, top);
+  await scroll(true);
+  let found = [];
+  for (let i = 0; i < 8; i++) {
+    await page.waitForTimeout(300);
+    found = await page.evaluate(liveComponents, { ...PAGE_ROW, text: name, attr: 'data-ai-page' });
+    if (found.length) break;
+    await scroll(false);
+  }
   if (!found.length) throw new Error(`no page called "${name}"`);
   await click(page, page.locator('[data-ai-page]'));
   for (let i = 0; i < 40; i++) { // wait for the editor to load it
@@ -135,6 +166,7 @@ async function select(page, id) {
   await showLayers(page);
   for (let attempt = 1; ; attempt++) {
     try {
+      if (id.includes('.states.')) return await selectInState(page, id);
       return await (id.split('.').length > 3 ? selectChild(page, id) : selectTop(page, id));
     } catch (e) {
       if (attempt >= 2 || /Stopped by you/.test(e.message)) throw e;
@@ -182,6 +214,25 @@ async function clickRow(page, row) {
   const rb = await row.boundingBox();
   if (rb) await click(page, { x: rb.x + rb.width / 2, y: rb.y + Math.min(rb.height / 2, 12) });
   return !!rb;
+}
+
+// On a slideshow slide: open that slide (its row in the layers list), then pick the element's row.
+async function selectInState(page, id) {
+  if (await isSelected(page, id)) return;
+  const p = id.split('.'), sid = p.slice(0, 3).join('.');
+  await leaveGroup(page);
+  const STATE = { has: ['id'], is: { layerType: ['state'], id: [sid] }, attr: 'data-ai-target' };
+  if (!(await page.evaluate(liveComponents, STATE)).length) {
+    await click(page, page.locator(`#si_block_mobile_${p[0]}`)); // a section's rows show once it's active
+    await page.waitForTimeout(800);
+  }
+  if ((await page.evaluate(liveComponents, STATE)).length) { await clickRow(page, page.locator('[data-ai-target]')); await page.waitForTimeout(700); }
+  const ROW = { has: ['elemKey'], is: { layerType: ['element'], elemKey: [id] }, attr: 'data-ai-target' };
+  for (let i = 0; i < 3 && !(await isSelected(page, id)); i++) {
+    if ((await page.evaluate(liveComponents, ROW)).length) await clickRow(page, page.locator('[data-ai-target]'));
+    await page.waitForTimeout(600);
+  }
+  if (!(await isSelected(page, id))) throw new Error(`could not select ${id}`);
 }
 
 // A point on the mobile stage where this hitbox is really the thing under the mouse: inside the
@@ -400,4 +451,4 @@ async function setSectionHeight(page, model, blockId, h, note = '') {
   return fresh;
 }
 
-module.exports = { DATA, STOP, FIELD, RUN, flag, eachPage, toPage, listPages, openPage, select, setField, applyMobile, setSectionHeight, findEl, log, readLog, say };
+module.exports = { DATA, STOP, FIELD, RUN, VERSION, skips, pruneLog, flag, eachPage, toPage, listPages, openPage, select, setField, applyMobile, setSectionHeight, findEl, log, readLog, say };
