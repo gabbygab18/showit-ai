@@ -86,10 +86,25 @@ function plan(block, ink = {}, top = PAD_TOP, o = {}) {
     if (r && Math.abs(r[0].e.desktop.y - x.e.desktop.y) < 20) r.push(x); else rows.push([x]);
   }
   const small = x => x.e.type !== 'text' && x.e.desktop.w <= 120;
+  // Columns: a row of photos with a row of captions (and maybe more rows) lined up under them reads
+  // column by column on a phone: photo 1 + its caption, then photo 2 + its caption... Each column after
+  // the first starts a new card (more space before it).
+  const spanX = (a, b) => a.e.desktop.x < b.e.desktop.x + b.e.desktop.w && b.e.desktop.x < a.e.desktop.x + a.e.desktop.w;
+  for (let i = 0; i < rows.length; i++) {
+    const head = rows[i], n = head.length;
+    if (n < 2 || head.every(small)) continue;
+    let j = i + 1;
+    while (j < rows.length && rows[j].length === n && rows[j].every((x, c) => spanX(x, head[c]) && head.every((h, c2) => c2 === c || !spanX(x, h)))) j++;
+    if (j === i + 1) continue;
+    const cols = head.map((_, c) => rows.slice(i, j).map(r => r[c]));
+    cols.forEach((col, c) => { if (c) col[0].colStart = true; });
+    rows.splice(i, j - i, ...cols.flat().map(x => [x]));
+    i += cols.flat().length - 1;
+  }
   const textH = (id, e, w) => { const k = ink[id]; return k ? textBoxH({ dy: k.dy, h: k.h * Math.max(1, k.w / w) }) : e.mobile.h; };
 
   let y = top, end = null, prevK = null;
-  const at = k => { y = end === null ? top : end + gapFor(prevK, k); prevK = k; }; // next unit's top
+  const at = (k, col) => { y = end === null ? top : end + (col ? CARD_GAP : gapFor(prevK, k)); prevK = k; }; // next unit's top
   const units = [];
   for (const r of rows) {
     if (r.length > 1 && r.every(small)) {
@@ -152,7 +167,7 @@ function plan(block, ink = {}, top = PAD_TOP, o = {}) {
         h = e.type === 'line' ? e.mobile.h : Math.round(d.h * w / d.w); // line h = stroke weight, keep
         x = Math.round(L + (W - w) / 2);
       }
-      at(e.type === 'text' && !keep ? 'text' : 'block');
+      at(e.type === 'text' && !keep ? 'text' : 'block', g.colStart);
       const steps = [{ id, type: e.type, keep, off, target: { x, y, w, h } }];
       const over = rest.filter(t => host.get(t) === g).sort((a, b) => a.e.desktop.y - b.e.desktop.y);
       if (over.length) {
@@ -163,7 +178,7 @@ function plan(block, ink = {}, top = PAD_TOP, o = {}) {
         let ty = y + Math.round((h - total) / 2);
         over.forEach((t, i) => { steps.push({ id: t.id, type: 'text', target: { x: x + INSET, y: ty, w: tw, h: hs[i] } }); ty += hs[i] + TEXT_GAP; });
       }
-      units.push({ kind: over.length ? 'over' : 'one', y, h, steps });
+      units.push({ kind: over.length ? 'over' : 'one', y, h, steps, colStart: !!g.colStart });
       end = y + h;
     }
   }
@@ -234,7 +249,7 @@ async function layOut(page, model, units, top, note, name) {
   for (const u of units) {
     if (name) await say(page, `Laying out ${name}: ${++n}/${units.length}`);
     const k = kindOf(u);
-    y = end === null ? top : end + gapFor(prevK, k);
+    y = end === null ? top : end + (u.colStart ? CARD_GAP : gapFor(prevK, k));
     prevK = k;
     if (u.kind === 'group') {
       // Move the group into place first (on screen, so it can be opened), lay out its insides in its
@@ -363,6 +378,15 @@ function selftest() {
     { x: 24, y: 92, w: 272, h: 20 },   // 14px under the heading
     { x: 80, y: 136, w: 160, h: 44 },  // 24px gap; 160×44 button, centred
   ]);
+  // Three photos in a row with their captions in the row below: read column by column.
+  const grid = { id: 'R', desktop: { h: 900 }, mobile: { h: 600 }, elements: [0, 1, 2].flatMap(c => [
+    { type: 'graphic', visible: 'a', desktop: { x: c * 406, y: 221, w: 388, h: 480 }, mobile: {} },
+    { type: 'text', visible: 'a', desktop: { x: c * 406, y: 717, w: 388, h: 61 }, mobile: { h: 20 } },
+  ]) };
+  const gp = plan(grid);
+  assert.deepStrictEqual(gp.steps.map(s => s.id.split('.').pop()), ['0', '1', '2', '3', '4', '5']); // photo, caption, photo, caption...
+  assert.deepStrictEqual(gp.units.map(u => u.colStart), [false, false, true, false, true, false]);
+  assert.strictEqual(gp.steps[2].target.y - (gp.steps[1].target.y + gp.steps[1].target.h), 32); // a card's worth of space
   console.log('selftest ok');
 }
 

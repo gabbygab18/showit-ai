@@ -360,7 +360,14 @@ async function setSectionHeight(page, model, blockId, h, note = '') {
     }
     await click(page, row);
   } else {
-    // Page section. 1) Click an empty corner inside it (selects the section itself).
+    // Page section. 0) Its row in the layers list (works even when elements cover the whole section).
+    await showLayers(page);
+    const ROW = { has: ['id'], is: { layerType: ['block'], id: [blockId] }, attr: 'data-ai-target' };
+    if ((await page.evaluate(liveComponents, ROW)).length) {
+      await clickRow(page, page.locator('[data-ai-target]'));
+      await page.waitForTimeout(600);
+    }
+    // 1) Click an empty corner inside it (selects the section itself).
     // 2) If corners are covered by elements: click into another section, then back into this one
     //    (the first click into an inactive section selects the section). Needs a second section.
     const box = page.locator(`#si_block_mobile_${blockId}`);
